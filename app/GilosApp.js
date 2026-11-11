@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { supabase } from "@/lib/supabase";
 
 /* ---------- נתונים קבועים ---------- */
 const SUPPORT_EMAIL = "postenter@gmail.com";
@@ -183,12 +184,21 @@ const INITIAL = {
   // פרופילים: כמה עסקים תחת אותו משתמש. הנתונים של הפרופיל הפעיל יושבים ישירות ב-state,
   // ושל האחרים נשמרים ב-profiles[].data עד שעוברים אליהם.
   profiles: [], pid: null, newProf: "", prev: "home", quizFrom: "auth",
+  uid: null, busy: false, authNote: "", confirmDelete: false,
 };
 // השדות ששייכים לפרופיל (ולא לחשבון): הגדרות, שאלון, האשטגים, חשבונות מחוברים ולוח תוכן
 const PROFILE_KEYS = ["quiz", "other", "tags", "offTags", "prompt", "tpl", "subs", "watermark", "sound", "track", "soundText", "nets", "format", "queue", "saved", "connected", "intro", "logo", "fixed"];
 const snapshot = (s) => Object.fromEntries(PROFILE_KEYS.map((k) => [k, s[k]]));
 const NEW_PROFILE = { ...snapshot(INITIAL), queue: [], connected: [] };
 const WORK_RESET = { versions: [], chosen: null, media: [], done: null, qi: 0 };
+// מה שנשמר במסד הנתונים: בלי כתובות מקומיות של תמונות, שלא שורדות רענון
+const cleanSnap = (s) => {
+  const d = snapshot(s);
+  return { ...d, saved: d.saved.map(({ img, ...v }) => v) };
+};
+const ACTIVE_KEY = "gilos-active-profile";
+const readActive = () => { try { return localStorage.getItem(ACTIVE_KEY); } catch { return null; } };
+const writeActive = (id) => { try { localStorage.setItem(ACTIVE_KEY, id); } catch {} };
 
 /* ---------- עזרים ---------- */
 const shuffle = (a) => [...a].sort(() => Math.random() - 0.5);
@@ -281,7 +291,7 @@ export default function GilosApp() {
   const chev = t("‹", "›");
 
   const set = (patch) => setS((s) => ({ ...s, ...(typeof patch === "function" ? patch(s) : patch) }));
-  const go = (screen) => set({ screen });
+  const go = (screen) => set({ screen, confirmDelete: false });
   const toast = (m) => {
     setToastMsg(m); setToastOn(true);
     clearTimeout(toastTimer.current);
@@ -303,7 +313,58 @@ export default function GilosApp() {
 
   const name = S.user || t("אורח", "Guest");
   const caps = CAPS[lang];
-  const enterGuest = () => set({ user: null, credits: GUEST_CREDITS, maxCredits: GUEST_CREDITS, profiles: [{ id: 1, name: null }], pid: 1, screen: "home" });
+  const enterGuest = () => set({ user: null, uid: null, credits: GUEST_CREDITS, maxCredits: GUEST_CREDITS, profiles: [{ id: 1, name: null }], pid: 1, screen: "home" });
+
+  /* ---------- Supabase: טעינה ושמירה ---------- */
+  // טוען את החשבון והפרופילים של המשתמש המחובר, ופותח את הפרופיל הפעיל במכשיר הזה
+  const loadAccount = async (user, nextScreen) => {
+    const [acc, profs] = await Promise.all([
+      supabase.from("accounts").select("credits").eq("user_id", user.id).maybeSingle(),
+      supabase.from("profiles").select("id, name, data").order("created_at"),
+    ]);
+    if (acc.error || profs.error || !profs.data?.length) {
+      await supabase.auth.signOut();
+      set({ ...INITIAL, busy: false });
+      return toast(t("לא הצלחנו לטעון את החשבון. נסו שוב.", "We couldn't load your account. Please try again."));
+    }
+    const profiles = profs.data.map((p) => ({ id: p.id, name: p.name, data: Object.keys(p.data || {}).length ? p.data : null }));
+    const saved = readActive();
+    const active = profiles.find((p) => p.id === saved) || profiles[0];
+    writeActive(active.id);
+    // מי שעוד לא מילא שאלון בפרופיל הזה (למשל אחרי אישור אימייל) מגיע אליו
+    const screen = nextScreen || (active.data ? "home" : "quiz");
+    set({
+      ...WORK_RESET, ...NEW_PROFILE, ...(active.data || {}),
+      user: user.user_metadata?.name || user.email.split("@")[0], uid: user.id,
+      credits: acc.data?.credits ?? 0, maxCredits: Math.max(MEMBER_CREDITS, acc.data?.credits ?? 0),
+      profiles, pid: active.id, pass: "", busy: false, authNote: "", quizFrom: "auth", screen,
+    });
+  };
+
+  // התחברות קיימת (גם אחרי לחיצה על קישור האישור באימייל)
+  useEffect(() => {
+    if (!supabase) return;
+    let alive = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (alive && data.session) loadAccount(data.session.user);
+    });
+    return () => { alive = false; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // שמירה אוטומטית של הפרופיל הפעיל, שנייה אחרי השינוי האחרון
+  const cloudSnap = S.uid && S.pid ? JSON.stringify(cleanSnap(S)) : "";
+  useEffect(() => {
+    if (!supabase || !cloudSnap) return;
+    const id = setTimeout(() => {
+      supabase.from("profiles").update({ data: JSON.parse(cloudSnap), updated_at: new Date().toISOString() }).eq("id", S.pid).then(({ error }) => {
+        if (error) toast(t("השמירה נכשלה — בדקו את החיבור", "Saving failed — check your connection"));
+      });
+    }, 1000);
+    return () => clearTimeout(id);
+  }, [cloudSnap, S.pid]); // eslint-disable-line react-hooks/exhaustive-deps
+  const saveNow = (s) => {
+    if (supabase && s.uid && s.pid) supabase.from("profiles").update({ data: cleanSnap(s), updated_at: new Date().toISOString() }).eq("id", s.pid).then(() => {});
+  };
 
   // פרופילים
   const activeProfile = S.profiles.find((p) => p.id === S.pid);
@@ -311,43 +372,122 @@ export default function GilosApp() {
   const openProfiles = () => set((s) => ({ prev: s.screen === "profiles" ? s.prev : s.screen, screen: "profiles" }));
   const stash = (s) => s.profiles.map((p) => (p.id === s.pid ? { ...p, data: snapshot(s) } : p));
   const switchProfile = (id) => {
+    saveNow(S); // לא לאבד שינוי אחרון בפרופיל שעוזבים
+    if (S.uid) writeActive(id);
     set((s) => {
       const profiles = stash(s), target = profiles.find((p) => p.id === id);
-      return { profiles, pid: id, ...(target.data || NEW_PROFILE), ...WORK_RESET, screen: "home" };
+      return { profiles, pid: id, ...NEW_PROFILE, ...(target.data || {}), ...WORK_RESET, screen: "home" };
     });
     toast(t("עברת פרופיל", "Profile switched"));
   };
-  const addProfile = (e) => {
+  const addProfile = async (e) => {
     e?.preventDefault();
     const nm = S.newProf.trim();
     if (!S.user) return toast(t("פרופילים נוספים זמינים אחרי הרשמה", "Extra profiles are available after sign-up"));
     if (!nm) return toast(t("נא לתת שם לפרופיל", "Please name the profile"));
     if (S.profiles.some((p) => p.name === nm)) return toast(t("כבר יש פרופיל בשם הזה", "A profile with this name already exists"));
-    const id = Math.max(...S.profiles.map((p) => p.id)) + 1;
+    let id;
+    if (supabase && S.uid) {
+      saveNow(S);
+      set({ busy: true });
+      const { data, error } = await supabase.from("profiles").insert({ name: nm, data: {} }).select("id").single();
+      set({ busy: false });
+      if (error) return toast(t("יצירת הפרופיל נכשלה. נסו שוב.", "Couldn't create the profile. Please try again."));
+      id = data.id;
+      writeActive(id);
+    } else {
+      id = Math.max(...S.profiles.map((p) => p.id)) + 1;
+    }
     set((s) => ({ profiles: [...stash(s), { id, name: nm, data: null }], pid: id, ...NEW_PROFILE, ...WORK_RESET, newProf: "", quizFrom: "profiles", screen: "quiz" }));
   };
-  const deleteProfile = (id) => {
+  const deleteProfile = async (id) => {
+    if (supabase && S.uid) {
+      const { error } = await supabase.from("profiles").delete().eq("id", id);
+      if (error) return toast(t("המחיקה נכשלה. נסו שוב.", "Delete failed. Please try again."));
+    }
     set((s) => ({ profiles: s.profiles.filter((p) => p.id !== id) }));
     toast(t("הפרופיל נמחק", "Profile deleted"));
+  };
+
+  // התנתקות ומחיקת חשבון
+  const logout = async () => {
+    saveNow(S);
+    if (supabase && S.uid) await supabase.auth.signOut();
+    set({ ...INITIAL });
+  };
+  const deleteAccount = async () => {
+    if (!S.confirmDelete) {
+      set({ confirmDelete: true });
+      return toast(t("לחצו שוב כדי למחוק לצמיתות את החשבון וכל הפרופילים", "Tap again to permanently delete your account and all profiles"));
+    }
+    if (!supabase || !S.uid) return set({ ...INITIAL });
+    set({ busy: true });
+    const { data } = await supabase.auth.getSession();
+    const res = await fetch("/api/delete-account", { method: "POST", headers: { Authorization: `Bearer ${data.session?.access_token}` } }).catch(() => null);
+    if (!res?.ok) {
+      set({ busy: false, confirmDelete: false });
+      return toast(t("המחיקה נכשלה. אפשר לכתוב לנו לתמיכה.", "Deletion failed. Please contact support."));
+    }
+    await supabase.auth.signOut();
+    try { localStorage.removeItem(ACTIVE_KEY); } catch {}
+    set({ ...INITIAL });
+    toast(t("החשבון נמחק", "Your account was deleted"));
   };
   const openAuth = (authMode) => set({ authMode, screen: "auth" });
   const back = (to) => <Back onClick={typeof to === "function" ? to : () => go(to)} label={t("חזרה", "Back")} />;
   const top = (title, to, end) => (<div className="top">{back(to)}<h3>{title}</h3>{end || <span className="spacer" />}</div>);
 
-  // TODO(שלב 4): להחליף בהרשמה והתחברות אמיתיות מול Supabase
-  const submitAuth = (e) => {
+  // הרשמה והתחברות. עם Supabase: אמיתיות. בלי: מצב הדגמה מקומי.
+  const submitAuth = async (e) => {
     e?.preventDefault();
+    if (S.busy) return;
     const reg = S.authMode === "register", nm = S.name.trim(), mail = S.mail.trim();
     if (reg && !nm) return toast(t("נא למלא שם", "Please enter a name"));
     if (!/^\S+@\S+\.\S+$/.test(mail)) return toast(t("נא להזין אימייל תקין", "Please enter a valid email"));
     if (S.pass.length < 8) return toast(t("הסיסמה צריכה לפחות 8 תווים", "Password needs at least 8 characters"));
-    const user = nm || mail.split("@")[0];
-    set({ user, pass: "", credits: MEMBER_CREDITS, maxCredits: MEMBER_CREDITS, qi: 0, profiles: [{ id: 1, name: user }], pid: 1, quizFrom: "auth", screen: reg ? "quiz" : "home" });
+
+    if (!supabase) {
+      const user = nm || mail.split("@")[0];
+      return set({ user, pass: "", credits: MEMBER_CREDITS, maxCredits: MEMBER_CREDITS, qi: 0, profiles: [{ id: 1, name: user }], pid: 1, quizFrom: "auth", screen: reg ? "quiz" : "home" });
+    }
+
+    set({ busy: true, authNote: "" });
+    if (reg) {
+      const { data, error } = await supabase.auth.signUp({ email: mail, password: S.pass, options: { data: { name: nm }, emailRedirectTo: window.location.origin } });
+      if (error) {
+        set({ busy: false });
+        return toast(error.code === "weak_password" ? t("הסיסמה חלשה מדי — נסו סיסמה ארוכה ומגוונת יותר", "Password is too weak — try a longer, more varied one")
+          : error.status === 429 ? t("יותר מדי ניסיונות. נסו שוב בעוד כמה דקות.", "Too many attempts. Try again in a few minutes.")
+          : t("ההרשמה נכשלה. בדקו את הפרטים ונסו שוב.", "Sign-up failed. Check your details and try again."));
+      }
+      // כשנדרש אישור אימייל, אין עדיין התחברות: מחכים שהמשתמש ילחץ על הקישור
+      if (!data.session) return set({ busy: false, pass: "", authMode: "login", authNote: t(`שלחנו אימייל אישור ל-${mail}. לחצו על הקישור שבו, ואז התחברו.`, `We sent a confirmation email to ${mail}. Click the link in it, then log in.`) });
+      return loadAccount(data.session.user, "quiz");
+    }
+    const { data, error } = await supabase.auth.signInWithPassword({ email: mail, password: S.pass });
+    if (error) {
+      set({ busy: false });
+      return toast(error.code === "email_not_confirmed" ? t("צריך קודם לאשר את האימייל — חפשו את הקישור בתיבת הדואר", "Please confirm your email first — look for the link in your inbox")
+        : t("אימייל או סיסמה שגויים", "Wrong email or password"));
+    }
+    return loadAccount(data.user);
   };
 
   // TODO(שלב 6): להחליף בקריאה למנוע ה-AI האמיתי
-  const startProcess = () => {
+  const startProcess = async () => {
+    if (S.busy) return;
     if (S.credits < 1) return toast(t("נגמרו היצירות — אפשר לשדרג בהגדרות", "You're out of creations — upgrade in Settings"));
+    // משתמש רשום: היצירה יורדת במסד הנתונים, כך שהמספר נשמר בין מכשירים
+    if (supabase && S.uid) {
+      set({ busy: true });
+      const { data, error } = await supabase.rpc("use_credit");
+      set({ busy: false });
+      if (error) {
+        if (/no_credits/.test(error.message)) set({ credits: 0 });
+        return toast(/no_credits/.test(error.message) ? t("נגמרו היצירות — אפשר לשדרג בהגדרות", "You're out of creations — upgrade in Settings") : t("משהו השתבש. נסו שוב.", "Something went wrong. Please try again."));
+      }
+      set({ credits: data + 1 }); // השורה הבאה מורידה אחת, כמו במצב המקומי
+    }
     const img = S.media.find((m) => m.kind === "image")?.url;
     const versions = makeVersions().map((v) => ({ ...v, img }));
     set((s) => ({ credits: s.credits - 1, versions, pstep: 0, linkOpen: false, screen: "process" }));
@@ -408,6 +548,7 @@ export default function GilosApp() {
             <p className="sub">{reg ? t("דקה אחת, ואפשר להתחיל לפרסם", "One minute and you're ready to publish") : t("התחברו כדי להמשיך מאיפה שעצרתם", "Log in to pick up where you left off")}</p>
           </div>
           <hr className="neonline" />
+          {S.authNote && <div className="card note" role="status">✉️ {S.authNote}</div>}
           <form className="col" style={{ gap: 14 }} onSubmit={submitAuth} noValidate>
             {reg && (<div className="field"><label htmlFor="in-name">{t("שם מלא או שם העסק", "Full name or business name")}</label><input id="in-name" value={S.name} onChange={(e) => set({ name: e.target.value })} placeholder={t("השם שלך", "Your name")} autoComplete="name" /></div>)}
             <div className="field"><label htmlFor="in-mail">{t("אימייל", "Email")}</label><input id="in-mail" type="email" className="ltr" style={{ textAlign: t("right", "left") }} value={S.mail} onChange={(e) => set({ mail: e.target.value })} placeholder="name@email.com" autoComplete="email" /></div>
@@ -415,7 +556,7 @@ export default function GilosApp() {
             <button type="submit" hidden />
           </form>
           <div className="grow" />
-          <button className="btn btn-primary" onClick={submitAuth}>{reg ? t("הרשמה והמשך לשאלון", "Sign up and continue") : t("התחברות", "Log in")}</button>
+          <button className="btn btn-primary" disabled={S.busy} onClick={submitAuth}>{S.busy ? t("רגע…", "One moment…") : reg ? t("הרשמה והמשך לשאלון", "Sign up and continue") : t("התחברות", "Log in")}</button>
           <p className="muted tc" style={{ margin: 0, fontSize: 13.5 }}>
             {reg ? t("כבר יש לך חשבון?", "Already have an account?") : t("עדיין אין חשבון?", "No account yet?")}{" "}
             <button className="link" onClick={() => set({ authMode: reg ? "login" : "register" })}>{reg ? t("התחברות", "Log in") : t("הרשמה", "Sign up")}</button>
@@ -789,8 +930,8 @@ export default function GilosApp() {
           <div className="card stack" style={{ gap: 12, marginTop: 6 }}>
             <button className="setrow" onClick={openProfiles}><span>{t("הפרופילים שלי", "My profiles")} · {S.profiles.length}</span><span className="muted">{chev}</span></button>
             <button className="setrow" onClick={() => go("about")}><span>{t("אודות ותמיכה", "About and support")}</span><span className="muted">{chev}</span></button>
-            {S.user && <button className="setrow" onClick={() => toast(t("מחיקת חשבון תופעל עם חיבור מסד הנתונים", "Account deletion will work once the database is connected"))}><span>{t("מחיקת החשבון", "Delete account")}</span><span className="muted">{chev}</span></button>}
-            <button className="setrow danger" onClick={() => set({ ...INITIAL })}>{S.user ? t("התנתקות", "Log out") : t("יציאה ממצב אורח", "Exit guest mode")}</button>
+            {S.user && <button className={cx("setrow", S.confirmDelete && "danger")} disabled={S.busy} onClick={deleteAccount}><span>{S.confirmDelete ? t("לחצו שוב לאישור מחיקה סופית", "Tap again to confirm permanent deletion") : t("מחיקת החשבון", "Delete account")}</span><span className="muted">{chev}</span></button>}
+            <button className="setrow danger" onClick={logout}>{S.user ? t("התנתקות", "Log out") : t("יציאה ממצב אורח", "Exit guest mode")}</button>
           </div>
         </div>
       </section>

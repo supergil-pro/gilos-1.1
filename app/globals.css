@@ -413,3 +413,7 @@ label.src { cursor: pointer; position: relative; }
 @keyframes dustTwinkle { 0% { opacity: 0.55; } 100% { opacity: 1; } }
 .stars .dust { animation-name: dustTwinkle; }
 @media (prefers-reduced-motion: reduce) { .stars .dust { animation: none; } }
+
+/* הודעה במסך ההרשמה (למשל: נשלח אימייל אישור) */
+.note { border-color: var(--blue); box-shadow: 0 0 10px rgba(30, 155, 255, 0.35); font-size: 13.5px; line-height: 1.6; }
+.setrow:disabled { opacity: 0.5; }
