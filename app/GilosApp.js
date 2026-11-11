@@ -9,6 +9,8 @@ const GUEST_CREDITS = 3;
 const MEMBER_CREDITS = 20;
 const LANG_KEY = "gilos-lang";
 const MAX_MEDIA = 6;
+// יחסי תמונה במצלמה: מלא (כל מה שהמצלמה רואה), סטורי/ריל, פוסט, ריבוע
+const RATIOS = [["full", null], ["9:16", 9 / 16], ["4:5", 4 / 5], ["1:1", 1]];
 let mediaSeq = 0; // מזהה רץ לקבצים שנבחרו (רק לזיהוי בתוך הדפדפן)
 
 const NETS = [
@@ -17,7 +19,7 @@ const NETS = [
   { n: "TikTok", c: "#39FF14", v: 82 },
   { n: "YouTube", c: "#FFE600", v: 40 },
 ];
-const color = (n) => NETS.find((x) => x.n === n).c;
+const color = (n) => NETS.find((x) => x.n === n)?.c || "#8E97A8";
 const GRADS = [
   "linear-gradient(160deg,#1E9BFF,#0b1030 70%)",
   "linear-gradient(160deg,#FF3355,#2a0612 70%)",
@@ -95,6 +97,7 @@ const TEMPLATES = [
 const QUIZ = [
   { k: "type", t: "איזה תוכן אתם מעלים?", s: "נתאים את העריכה וההאשטגים לתחום שלכם", o: Object.keys(HASHTAGS) },
   { k: "nets", t: "באילו רשתות אתם פעילים?", s: "אפשר לבחור כמה", multi: true, o: [...NETS.map((x) => x.n), "LinkedIn", "X", "Threads", "Pinterest", "Snapchat", "Telegram"] },
+  { k: "connect", t: "חיבור החשבונות", s: "חיבור חד־פעמי — ומעכשיו הפרסום יוצא אוטומטית", connect: true },
   { k: "style", t: "איזה סגנון מתאים לכם?", s: "אפשר לשנות בכל רגע בהגדרות", o: ["דינמי וקצבי", "נקי ומינימלי", "חם ואישי", "יוקרתי", "הומוריסטי", "טרנדי", "ניאון ומועדונים", "רטרו / וינטג׳", "קולנועי", "צבעוני ושמח", "מקצועי ורשמי", "טבעי ואותנטי"] },
   { k: "aud", t: "מי קהל היעד?", s: "כדי לבחור טון ושעות פרסום", o: ["גילאי 18–24", "גילאי 25–40", "גילאי 40+", "עסקים", "כולם"] },
   { k: "tags", t: "האשטגים שמתאימים לכם", s: "בחרנו אוטומטית לפי התחום — אפשר לשנות", tags: true },
@@ -126,7 +129,7 @@ const EN = {
   "איזה תוכן אתם מעלים?": "What kind of content do you post?", "נתאים את העריכה וההאשטגים לתחום שלכם": "We'll match the editing and hashtags to your field",
   "באילו רשתות אתם פעילים?": "Which networks are you active on?", "אפשר לבחור כמה": "You can pick several",
   "איזה סגנון מתאים לכם?": "Which style suits you?", "אפשר לשנות בכל רגע בהגדרות": "You can change this any time in Settings",
-  "מי קהל היעד?": "Who is your audience?", "כדי לבחור טון ושעות פרסום": "So we can pick the tone and posting times",
+  "מי קהל היעד?": "Who is your audience?", "חיבור החשבונות": "Connect your accounts", "חיבור חד־פעמי — ומעכשיו הפרסום יוצא אוטומטית": "Connect once — from then on, posting is automatic", "כדי לבחור טון ושעות פרסום": "So we can pick the tone and posting times",
   "האשטגים שמתאימים לכם": "Hashtags that fit you", "בחרנו אוטומטית לפי התחום — אפשר לשנות": "Picked automatically for your field — feel free to change",
   "תארו את העיצוב שאתם רוצים": "Describe the look you want", "בחרו תבנית מוכנה או כתבו בעצמכם": "Pick a ready-made template or write your own",
   // תבניות פרומפט
@@ -186,8 +189,9 @@ const INITIAL = {
   // ושל האחרים נשמרים ב-profiles[].data עד שעוברים אליהם.
   profiles: [], pid: null, newProf: "", prev: "home", quizFrom: "auth",
   uid: null, busy: false, authNote: "", confirmDelete: false,
-  mediaSel: null, camTry: 0, pv: null, note: "", applying: false,
-  camFacing: "environment", camMode: "photo", camError: "", camReady: false, recording: false, recSec: 0,
+  connecting: null,
+  mediaSel: null, camTry: 0, pv: null, note: "", picks: [], aiN: 0, applying: false,
+  camFacing: "environment", camMode: "photo", camZoom: 1, camHW: null, camTorchOK: false, camTorch: false, camRatio: "full", camGrid: false, camTimer: 0, countdown: 0, camDims: null, camError: "", camReady: false, recording: false, recSec: 0,
 };
 // השדות ששייכים לפרופיל (ולא לחשבון): הגדרות, שאלון, האשטגים, חשבונות מחוברים ולוח תוכן
 const PROFILE_KEYS = ["quiz", "other", "tags", "offTags", "prompt", "tpl", "subs", "watermark", "sound", "track", "soundText", "nets", "format", "queue", "saved", "connected", "intro", "logo", "fixed"];
@@ -218,16 +222,145 @@ function makeVersions() {
     tip: tips[i], saved: false, rev: 1, notes: [],
   }));
 }
-// תיקון לגרסה לפי הערות המשתמש. TODO(שלב 6): לשלוח את ההערה למנוע ה-AI ולקבל סרטון ערוך מחדש
-function reviseVersion(v, note) {
-  return { ...v, rev: (v.rev || 1) + 1, notes: [...(v.notes || []), note], score: Math.min(99, v.score + 2 + Math.floor(Math.random() * 6)) };
+// תיקונים שהאפליקציה יודעת לבצע כבר עכשיו, בלי מנוע AI: צבע, תאורה, לוגו וכיתוב.
+// כל כלל מזהה ניסוח בעברית או באנגלית ומעדכן את האפקטים של הגרסה.
+const FX_RULES = [
+  [/שחור.?ו?.?לבן|מונוכרום|black.?(and|&).?white|\bb&w\b|grayscale|greyscale|monochrome/i, (f) => ({ ...f, gray: 1, sepia: 0 }), ["שחור לבן", "Black & white"]],
+  [/וינטג|ספיה|רטרו|vintage|sepia|retro/i, (f) => ({ ...f, sepia: 0.7, gray: 0 }), ["וינטג׳", "Vintage"]],
+  [/בצבע|בחזרה לצבע|צבע מלא|in colou?r|full colou?r/i, (f) => ({ ...f, gray: 0, sepia: 0 }), ["חזרה לצבע", "Back to color"]],
+  [/בהיר|יותר אור|brighter|lighter/i, (f) => ({ ...f, bright: (f.bright || 1) + 0.2 }), ["בהיר יותר", "Brighter"]],
+  [/כהה|darker/i, (f) => ({ ...f, bright: Math.max(0.4, (f.bright || 1) - 0.2) }), ["כהה יותר", "Darker"]],
+  [/ניגודיות|קונטרסט|contrast/i, (f) => ({ ...f, contrast: (f.contrast || 1) + 0.25 }), ["יותר ניגודיות", "More contrast"]],
+  [/צבעוני יותר|צבעים חזקים|רווי|vivid|more colou?r|saturat/i, (f) => ({ ...f, sat: (f.sat || 1) + 0.4, gray: 0 }), ["צבעים חזקים יותר", "More vivid"]],
+  [/פחות צבע|דהוי|muted|faded/i, (f) => ({ ...f, sat: Math.max(0.2, (f.sat || 1) - 0.4) }), ["פחות צבע", "Less color"]],
+  [/חמים|חם יותר|warm/i, (f) => ({ ...f, warm: 1, cool: 0 }), ["צבעים חמים", "Warmer"]],
+  [/צבעים קרים|קר יותר|cool/i, (f) => ({ ...f, cool: 1, warm: 0 }), ["צבעים קרים", "Cooler"]],
+  [/בלי לוגו|ללא לוגו|הסר.{0,6}לוגו|no logo|remove.{0,6}logo/i, (f) => ({ ...f, logo: false }), ["בלי לוגו", "No logo"]],
+  [/עם לוגו|הוסף.{0,6}לוגו|add.{0,6}logo/i, (f) => ({ ...f, logo: true }), ["עם לוגו", "With logo"]],
+  [/בלי כתוביות|ללא כתוביות|בלי כיתוב|ללא כיתוב|no captions?|no subtitles/i, (f) => ({ ...f, subs: false }), ["בלי כיתוב", "No captions"]],
+  [/כיתוב גדול|כתוביות גדולות|גדול יותר.{0,8}כיתוב|bigger captions?|larger captions?/i, (f) => ({ ...f, subs: true, bigSubs: true }), ["כיתוב גדול", "Bigger captions"]],
+];
+const parseFx = (note, fx = {}) => FX_RULES.reduce((acc, [re, fn, label]) => (re.test(note) ? { fx: fn(acc.fx), applied: [...acc.applied, label] } : acc), { fx, applied: [] });
+// מתרגם את האפקטים לפילטר CSS שמוחל על התמונה או הסרטון של הגרסה
+const fxFilter = (f = {}) => [
+  f.gray && "grayscale(1)", f.sepia && `sepia(${f.sepia})`, f.warm && "sepia(0.35) saturate(1.25)", f.cool && "hue-rotate(-18deg) saturate(1.1)",
+  f.hue && `hue-rotate(${f.hue}deg)`,
+  f.bright && f.bright !== 1 && `brightness(${f.bright})`, f.contrast && f.contrast !== 1 && `contrast(${f.contrast})`, f.sat && f.sat !== 1 && `saturate(${f.sat})`,
+].filter(Boolean).join(" ") || undefined;
+// הגוון הצבעוני של הסגנון לא מוצג כשיש אפקט, או כשמבקשים שחור לבן, וינטג׳ או צבעים רגועים
+const fxTint = (f = {}) => !(f.look || f.gray || f.sepia || (f.sat && f.sat < 1));
+
+// אפקטים מוכנים לתמונות ולסרטונים. כל אפקט מחליף את הצבע והתאורה, ולא נוגע בלוגו ובכיתוב.
+const COLOR_KEYS = ["gray", "sepia", "warm", "cool", "hue", "bright", "contrast", "sat", "look", "lookName"];
+const EFFECTS = [
+  ["none", "ללא", "None", {}],
+  ["bw", "שחור לבן", "B&W", { gray: 1 }],
+  ["noir", "נואר", "Noir", { gray: 1, contrast: 1.6, bright: 0.85 }],
+  ["vintage", "וינטג׳", "Vintage", { sepia: 0.6, contrast: 1.1, bright: 0.95 }],
+  ["warm", "חמים", "Warm", { warm: 1 }],
+  ["cool", "קרים", "Cool", { cool: 1 }],
+  ["vivid", "עז", "Vivid", { sat: 1.6, contrast: 1.1 }],
+  ["faded", "דהוי", "Faded", { sat: 0.55, bright: 1.1, contrast: 0.85 }],
+  ["drama", "דרמטי", "Drama", { contrast: 1.45, bright: 0.9, sat: 1.15 }],
+  ["neon", "ניאון", "Neon", { hue: -40, sat: 1.8, contrast: 1.2 }],
+  ["dreamy", "חלומי", "Dreamy", { bright: 1.15, sat: 1.2, contrast: 0.9 }],
+  ["sunset", "שקיעה", "Sunset", { sepia: 0.35, sat: 1.4, hue: -12 }],
+];
+const withLook = (fx = {}, key, name, fields) => {
+  const base = Object.fromEntries(Object.entries(fx).filter(([k]) => !COLOR_KEYS.includes(k)));
+  return key === "none" ? base : { ...base, ...fields, look: key, lookName: name };
+};
+// מצב AI: בכל לחיצה ממציא אפקט חדש מצירוף אקראי של גוון, רוויה, ניגודיות ותאורה
+const AI_NAMES = [["זוהר", "Glow"], ["לילה", "Night"], ["קיץ", "Summer"], ["ערפל", "Haze"], ["חשמלי", "Electric"], ["אורבני", "Urban"], ["קולנועי", "Cinema"], ["פסטל", "Pastel"], ["גלקסיה", "Galaxy"], ["אש", "Fire"]];
+function aiEffect(n) {
+  const r = (a, b) => +(a + Math.random() * (b - a)).toFixed(2);
+  const [he, en] = AI_NAMES[Math.floor(Math.random() * AI_NAMES.length)];
+  return {
+    key: `ai-${n}`, he: `AI · ${he}`, en: `AI · ${en}`,
+    fields: { hue: Math.round(r(-70, 70)), sat: r(0.6, 1.9), contrast: r(0.85, 1.5), bright: r(0.85, 1.2), sepia: Math.random() < 0.3 ? r(0.2, 0.6) : 0 },
+  };
 }
+
+// תיקון לגרסה לפי הערות המשתמש. מה שאפשר כבר מבוצע; השאר יבוצע כשמנוע ה-AI יחובר (שלב 6)
+function reviseVersion(v, note) {
+  const { fx, applied } = parseFx(note, v.fx || {});
+  return { version: { ...v, fx, rev: (v.rev || 1) + 1, notes: [...(v.notes || []), note], score: Math.min(99, v.score + 2 + Math.floor(Math.random() * 6)) }, applied };
+}
+// קבוצות חיבור לפי הרשתות שנבחרו. אינסטגרם ופייסבוק מתחברות יחד, בהתחברות אחת של מטא.
+const NET_STYLE = {
+  Instagram: { bg: "linear-gradient(135deg, #833AB4, #E1306C 50%, #FCAF45)", mark: "IG" },
+  Facebook: { bg: "#1877F2", mark: "f" },
+  TikTok: { bg: "linear-gradient(135deg, #25F4EE, #000 45%, #000 55%, #FE2C55)", mark: "TT" },
+  YouTube: { bg: "#FF0000", mark: "▶" },
+  LinkedIn: { bg: "#0A66C2", mark: "in" },
+  X: { bg: "#000", mark: "X" },
+  Threads: { bg: "#000", mark: "@" },
+  Pinterest: { bg: "#E60023", mark: "P" },
+  Snapchat: { bg: "#FFFC00", fg: "#000", mark: "S" },
+  Telegram: { bg: "#26A5E4", mark: "✈" },
+};
+function connectGroups(nets) {
+  const chosen = nets.filter((n) => NET_STYLE[n]);
+  const meta = chosen.filter((n) => n === "Instagram" || n === "Facebook");
+  const groups = meta.length ? [{ key: "meta", nets: meta, meta: meta.length > 1, ...NET_STYLE[meta[0]], ...(meta.length > 1 ? { bg: "linear-gradient(135deg, #833AB4, #E1306C 40%, #1877F2)", mark: "IG·f" } : {}) }] : [];
+  return [...groups, ...chosen.filter((n) => !meta.includes(n)).map((n) => ({ key: n, nets: [n], ...NET_STYLE[n] }))];
+}
+
+// סט אייקונים קווי אחיד (24×24, קו לבן), בסגנון אייקוני האפליקציות של אינסטגרם
+const GLYPHS = {
+  short: <><circle cx="6" cy="7" r="2.6" /><circle cx="6" cy="17" r="2.6" /><path d="M8.3 8.5L20 17M8.3 15.5L20 7" /></>,
+  opening: <path d="M13.2 2.8L5.5 13.4h5.6l-.9 7.8 7.8-10.7h-5.7z" />,
+  bigsubs: <><path d="M3.5 18.5L8.2 5.5l4.7 13M5.2 14h6" /><path d="M14.5 18.5l3-7.5 3 7.5M15.4 16.4h4.2" /></>,
+  nosubs: <><rect x="3" y="5.5" width="18" height="13" rx="3" /><path d="M7 11.5h5M14.5 11.5H17M7 14.8h3.5M12.5 14.8H17" /><path d="M3.5 3.5l17 17" /></>,
+  nologo: <><path d="M3.5 11.6V4.4c0-.5.4-.9.9-.9h7.2l8.9 8.9-8.2 8.2z" /><circle cx="8" cy="8" r="1.5" /><path d="M2.5 2.5l19 19" /></>,
+  logo: <><path d="M3.5 11.6V4.4c0-.5.4-.9.9-.9h7.2l8.9 8.9-8.2 8.2z" /><circle cx="8" cy="8" r="1.5" /></>,
+  calm: <><path d="M9 17.5V6.2l10-2.2v11.3" /><circle cx="6.5" cy="17.5" r="2.5" /><circle cx="16.5" cy="15.3" r="2.5" /></>,
+  upbeat: <path d="M3.5 10v4M7.5 6.5v11M11.5 9v6M15.5 4v16M19.5 8.5v7" />,
+  bright: <><circle cx="12" cy="12" r="4" /><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6" /></>,
+  cta: <><circle cx="12" cy="12" r="9" /><path d="M8 12h8M12.8 8.4l3.6 3.6-3.6 3.6" /></>,
+  sparkle: <><path d="M12 3l1.9 5.6L19.5 10.5l-5.6 1.9L12 18l-1.9-5.6L4.5 10.5l5.6-1.9z" /><path d="M18.5 3.5v3M17 5h3M5.5 16.5v3M4 18h3" /></>,
+  flash: <path d="M13.2 2.8L5.5 13.4h5.6l-.9 7.8 7.8-10.7h-5.7z" />,
+  timer: <><circle cx="12" cy="13.5" r="7.5" /><path d="M12 13.5V9.5M9.5 2.5h5M18.4 6.6l1.4-1.4" /></>,
+  grid: <><rect x="3.5" y="3.5" width="17" height="17" rx="2.5" /><path d="M9.2 3.5v17M14.8 3.5v17M3.5 9.2h17M3.5 14.8h17" /></>,
+};
+const Glyph = ({ name, size = 22, sw = 1.9 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{GLYPHS[name]}</svg>
+);
+// אייקון על רקע גרדיאנט מעוגל, כמו אייקוני אפליקציות
+const GlyphBadge = ({ name, from, to }) => (
+  <span className="glyphbadge" style={{ background: `linear-gradient(135deg, ${from}, ${to})` }}><Glyph name={name} /></span>
+);
+
+// תיקונים מהירים: כל אחד נבחר פעם אחת (לחיצה נוספת מבטלת), כדי שלא יופיע כפול בהערה. [מזהה, צבע התחלה, צבע סוף, עברית, אנגלית]
 const QUICK_NOTES = [
-  ["קצר יותר", "Shorter"], ["כיתוב גדול יותר", "Bigger captions"], ["מוזיקה רגועה יותר", "Calmer music"],
-  ["פתיחה חזקה יותר", "Stronger opening"], ["בלי לוגו", "No logo"], ["צבעים חמים יותר", "Warmer colors"],
+  ["short", "#FF3D7F", "#FF8A3D", "קצר יותר", "Shorter"],
+  ["opening", "#FF8A00", "#FFD000", "פתיחה חזקה יותר", "Stronger opening"],
+  ["bigsubs", "#6A5CFF", "#00B4FF", "כיתוב גדול יותר", "Bigger captions"],
+  ["nosubs", "#5B6475", "#8E97A8", "בלי כיתוב", "No captions"],
+  ["nologo", "#833AB4", "#E1306C", "בלי לוגו", "No logo"],
+  ["logo", "#E1306C", "#F77737", "עם לוגו", "With logo"],
+  ["calm", "#00B4FF", "#00D9A6", "מוזיקה רגועה יותר", "Calmer music"],
+  ["upbeat", "#FF2E63", "#B23BFF", "מוזיקה קצבית יותר", "More upbeat music"],
+  ["bright", "#FFB800", "#FFE45C", "בהיר יותר", "Brighter"],
+  ["cta", "#00C46A", "#6BE27A", "קריאה לפעולה בסוף", "Call to action at the end"],
 ];
 
 /* ---------- רכיבים קטנים ---------- */
+// שורה נגללת לצדדים: החלקה באצבע בטלפון, וחיצים בצדדים במחשב
+const HScroll = ({ label, prev, next, children }) => {
+  const by = (e, dir) => {
+    const row = e.currentTarget.parentElement.querySelector(".hscroll");
+    const rtl = getComputedStyle(row).direction === "rtl";
+    row.scrollBy({ left: dir * (rtl ? -1 : 1) * row.clientWidth * 0.7, behavior: "smooth" });
+  };
+  return (
+    <div className="hswrap">
+      <button className="harrow start" aria-label={prev} onClick={(e) => by(e, -1)}>‹</button>
+      <div className="hscroll" role="group" aria-label={label}>{children}</div>
+      <button className="harrow end" aria-label={next} onClick={(e) => by(e, 1)}>›</button>
+    </div>
+  );
+};
 const Back = ({ onClick, label }) => (
   <button className="back" onClick={onClick} aria-label={label}>
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
@@ -249,18 +382,34 @@ const Seg = ({ value, options, onChange }) => (
 );
 const Thumb = ({ g, style, children }) => <div className="thumb" style={{ "--g": g, ...style }}>{children}</div>;
 // תצוגה מקדימה של קובץ שנבחר מהמכשיר (כתובת מקומית בדפדפן), או של קישור
+// אייקון קטן בפינה הימנית התחתונה: תמונה או סרטון (עם משך, רק לסרטון)
+const KindBadge = ({ kind, dur, label }) => (
+  <span className="kindbadge" title={label} aria-label={label}>
+    {kind === "image" ? (
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="8.5" cy="9.5" r="1.6" /><path d="M21 16l-5-5-8 8" /></svg>
+    ) : (
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l12-7.5z" /></svg>
+    )}
+    {kind !== "image" && dur ? <span className="ltr">{dur}</span> : null}
+  </span>
+);
+const verKind = (v) => (v?.img ? "image" : "video"); // גרסה בלי תמונה (קישור או בלי מדיה) נחשבת סרטון
+
+// תצוגה מקדימה של קובץ שנבחר מהמכשיר (כתובת מקומית בדפדפן), או של קישור
 const MediaView = ({ m }) => {
   if (m.kind === "link") return <span className="linkthumb"><span>🔗</span><span className="ellipsis ltr">{m.name}</span></span>;
-  if (m.kind === "video") return <><video className="fill" src={m.url} muted playsInline preload="metadata" /><span className="vbadge">▶</span></>;
-  // eslint-disable-next-line @next/next/no-img-element
-  return <img className="fill" src={m.url} alt={m.name} />;
+  if (m.kind === "video") return <><video className="fill" src={m.url} muted playsInline preload="metadata" /><KindBadge kind="video" /></>;
+  return <>
+    {/* eslint-disable-next-line @next/next/no-img-element */}
+    <img className="fill" src={m.url} alt={m.name} /><KindBadge kind="image" />
+  </>;
 };
-// תמונת הרקע של גרסה: התמונה או הסרטון שהועלו, עם גוון הסגנון מעליהם
-const Cover = ({ img, vid, g }) => (img || vid ? (
+// תמונת הרקע של גרסה: התמונה או הסרטון שהועלו, עם האפקטים מהתיקונים וגוון הסגנון
+const Cover = ({ img, vid, g, fx }) => (img || vid ? (
   <>
     {/* eslint-disable-next-line @next/next/no-img-element */}
-    {img ? <img className="fill" src={img} alt="" /> : <video className="fill" src={`${vid}#t=0.1`} muted playsInline preload="metadata" />}
-    <span className="tint" style={{ background: g }} />
+    {img ? <img className="fill" src={img} alt="" style={{ filter: fxFilter(fx) }} /> : <video className="fill" src={`${vid}#t=0.1`} muted playsInline preload="metadata" style={{ filter: fxFilter(fx) }} />}
+    {fxTint(fx) && <span className="tint" style={{ background: g }} />}
   </>
 ) : null);
 const NetTags = ({ nets }) => (
@@ -528,33 +677,44 @@ export default function GilosApp() {
 
   // מצלמה בתוך האפליקציה: עובדת גם במחשב (מצלמת רשת) וגם בטלפון, בלי לצאת מהאפליקציה
   const videoRef = useRef(null), streamRef = useRef(null), recRef = useRef(null), chunksRef = useRef([]), keepRef = useRef(true);
-  const openCamera = () => (room < 1 ? tooMany() : set({ screen: "camera", camError: "", camReady: false }));
+  const zoomRef = useRef(1), pinchRef = useRef(null), drawRef = useRef(0), countRef = useRef(0);
+  const openCamera = () => (room < 1 ? tooMany() : set({ screen: "camera", camError: "", camReady: false, countdown: 0 }));
   const addCaptured = (blob, kind) => {
     const item = { id: `cam-${++mediaSeq}`, kind, url: URL.createObjectURL(blob), name: kind === "image" ? "photo.jpg" : "video" };
-    set((s) => ({ media: [...s.media, item].slice(0, MAX_MEDIA), screen: "upload", recording: false }));
+    set((s) => ({ media: [...s.media, item].slice(0, MAX_MEDIA), mediaSel: item.id, screen: "upload", recording: false, countdown: 0 }));
     toast(kind === "image" ? t("התמונה נוספה", "Photo added") : t("הסרטון נוסף", "Video added"));
   };
   const stopRec = (keep = true) => {
     keepRef.current = keep;
     if (recRef.current?.state === "recording") recRef.current.stop();
     recRef.current = null;
+    cancelAnimationFrame(drawRef.current);
   };
+  const cancelCountdown = () => { clearTimeout(countRef.current); };
   useEffect(() => {
     if (S.screen !== "camera") return;
     let cancelled = false;
     const md = navigator.mediaDevices;
     const fail = (camError) => !cancelled && set({ camError, camReady: false });
     if (!md?.getUserMedia) { Promise.resolve().then(() => fail("unsupported")); return () => { cancelled = true; }; }
-    md.getUserMedia({ video: { facingMode: S.camFacing, width: { ideal: 1080 }, height: { ideal: 1920 } }, audio: S.camMode === "video" })
+    // מבקשים את הרזולוציה המלאה של המצלמה, בלי לכפות יחס, כדי שהמצלמה לא תחתוך את התמונה
+    md.getUserMedia({ video: { facingMode: S.camFacing, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: S.camMode === "video" })
       .then((stream) => {
         if (cancelled) return stream.getTracks().forEach((tr) => tr.stop());
         streamRef.current = stream;
+        const track = stream.getVideoTracks()[0];
+        const caps = track?.getCapabilities?.() || {};
+        // זום אמיתי של המצלמה, כשהמכשיר תומך (בעיקר אנדרואיד). אחרת: זום דיגיטלי
+        const hw = caps.zoom && caps.zoom.max > caps.zoom.min ? { min: caps.zoom.min, max: caps.zoom.max } : null;
+        const z = hw ? (track.getSettings?.().zoom ?? Math.max(1, hw.min)) : 1;
+        zoomRef.current = hw ? 1 : z;
         if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play().catch(() => {}); }
-        set({ camError: "", camReady: true });
+        set({ camError: "", camReady: true, camHW: hw, camZoom: z, camTorchOK: !!caps.torch, camTorch: false });
       })
       .catch((err) => fail(err?.name === "NotAllowedError" || err?.name === "SecurityError" ? "denied" : err?.name === "NotFoundError" || err?.name === "OverconstrainedError" ? "nocam" : "failed"));
     return () => {
       cancelled = true;
+      cancelCountdown();
       stopRec(false);
       streamRef.current?.getTracks().forEach((tr) => tr.stop());
       streamRef.current = null;
@@ -571,23 +731,69 @@ export default function GilosApp() {
     return () => clearInterval(id);
   }, [S.recording]);
 
+  // זום: אמיתי כשיש, דיגיטלי (חיתוך מהמרכז) כשאין
+  const zoomRange = S.camHW || { min: 1, max: 4 };
+  const setZoom = (value) => {
+    const z = Math.round(Math.min(zoomRange.max, Math.max(zoomRange.min, value)) * 10) / 10;
+    if (S.camHW) streamRef.current?.getVideoTracks()[0]?.applyConstraints({ advanced: [{ zoom: z }] }).catch(() => {});
+    else zoomRef.current = z;
+    set({ camZoom: z });
+  };
+  const zoomPresets = [0.5, 1, 2, 3, 5].filter((p) => p >= zoomRange.min - 0.01 && p <= zoomRange.max + 0.01);
+  // צביטה בשתי אצבעות על התצוגה
+  const dist = (e) => Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+  const onPinchStart = (e) => { if (e.touches.length === 2) pinchRef.current = { d: dist(e), z: S.camZoom }; };
+  const onPinchMove = (e) => { if (e.touches.length === 2 && pinchRef.current) setZoom(pinchRef.current.z * (dist(e) / pinchRef.current.d)); };
+  const onPinchEnd = () => { pinchRef.current = null; };
+  const toggleTorch = () => {
+    const on = !S.camTorch;
+    streamRef.current?.getVideoTracks()[0]?.applyConstraints({ advanced: [{ torch: on }] }).then(() => set({ camTorch: on })).catch(() => toast(t("הפנס לא זמין במצלמה הזו", "The flash isn't available on this camera")));
+  };
+
+  // האזור שנשמר: יחס התמונה שנבחר, ואחריו הזום הדיגיטלי, תמיד מהמרכז
+  const ratioValue = RATIOS.find(([k]) => k === S.camRatio)?.[1] || null;
+  const cropRect = (vw, vh, z) => {
+    let w = vw, h = vh;
+    if (ratioValue) { if (vw / vh > ratioValue) w = vh * ratioValue; else h = vw / ratioValue; }
+    w /= z; h /= z;
+    return { x: (vw - w) / 2, y: (vh - h) / 2, w, h };
+  };
+
   const takePhoto = () => {
     const v = videoRef.current;
     if (!v?.videoWidth) return;
+    const r = cropRect(v.videoWidth, v.videoHeight, zoomRef.current);
     const c = document.createElement("canvas");
-    c.width = v.videoWidth; c.height = v.videoHeight;
-    c.getContext("2d").drawImage(v, 0, 0);
+    c.width = Math.round(r.w); c.height = Math.round(r.h);
+    c.getContext("2d").drawImage(v, r.x, r.y, r.w, r.h, 0, 0, c.width, c.height);
     c.toBlob((b) => b && addCaptured(b, "image"), "image/jpeg", 0.92);
   };
   const startRec = () => {
-    const stream = streamRef.current;
-    if (!stream || typeof MediaRecorder === "undefined") return toast(t("הדפדפן הזה לא תומך בהקלטת וידאו", "This browser can't record video"));
+    const stream = streamRef.current, v = videoRef.current;
+    if (!stream || !v?.videoWidth || typeof MediaRecorder === "undefined") return toast(t("הדפדפן הזה לא תומך בהקלטת וידאו", "This browser can't record video"));
+    let recStream = stream;
+    // כשיש חיתוך (יחס או זום דיגיטלי), מקליטים דרך קנבס כדי שהסרטון ייראה כמו התצוגה
+    const r0 = cropRect(v.videoWidth, v.videoHeight, zoomRef.current);
+    if (r0.w < v.videoWidth - 1 || r0.h < v.videoHeight - 1 || ratioValue) {
+      const c = document.createElement("canvas");
+      const base = cropRect(v.videoWidth, v.videoHeight, 1);
+      c.width = Math.round(base.w / 2) * 2; c.height = Math.round(base.h / 2) * 2;
+      const ctx = c.getContext("2d");
+      const draw = () => {
+        const r = cropRect(v.videoWidth, v.videoHeight, zoomRef.current);
+        ctx.drawImage(v, r.x, r.y, r.w, r.h, 0, 0, c.width, c.height);
+        drawRef.current = requestAnimationFrame(draw);
+      };
+      draw();
+      recStream = new MediaStream([...c.captureStream(30).getVideoTracks(), ...stream.getAudioTracks()]);
+    }
     const type = ["video/mp4", "video/webm;codecs=vp9,opus", "video/webm"].find((m) => MediaRecorder.isTypeSupported?.(m)) || "";
-    const rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+    const rec = new MediaRecorder(recStream, type ? { mimeType: type } : undefined);
     chunksRef.current = [];
     keepRef.current = true;
     rec.ondataavailable = (e) => e.data.size && chunksRef.current.push(e.data);
     rec.onstop = () => {
+      cancelAnimationFrame(drawRef.current);
       const blob = new Blob(chunksRef.current, { type: rec.mimeType || "video/webm" });
       if (keepRef.current && blob.size) addCaptured(blob, "video");
       else set({ recording: false });
@@ -597,22 +803,71 @@ export default function GilosApp() {
     recRef.current = rec;
     set({ recording: true, recSec: 0 });
   };
-  const leaveCamera = () => { stopRec(false); go("upload"); };
-  const shutter = () => (S.camMode === "photo" ? takePhoto() : S.recording ? stopRec(true) : startRec());
+  const leaveCamera = () => { cancelCountdown(); stopRec(false); go("upload"); };
+  // טיימר: ספירה לאחור לפני צילום או הקלטה
+  const fire = () => (S.camMode === "photo" ? takePhoto() : startRec());
+  const shutter = () => {
+    if (S.recording) return stopRec(true);
+    if (S.countdown) { cancelCountdown(); return set({ countdown: 0 }); }
+    if (!S.camTimer) return fire();
+    const tick = (n) => {
+      set({ countdown: n });
+      countRef.current = setTimeout(() => (n > 1 ? tick(n - 1) : (set({ countdown: 0 }), fire())), 1000);
+    };
+    tick(S.camTimer);
+  };
 
   // תצוגה מקדימה של גרסה ותיקונים לפי הערות
+  // חיבור חשבונות. TODO(שלב 5): להחליף בהתחברות אמיתית — אינסטגרם ופייסבוק יחד דרך התחברות אחת של מטא
+  const connectMany = (groups) => {
+    const queue = groups.filter((g) => !g.nets.every((n) => S.connected.includes(n)));
+    const step = (i) => {
+      if (i >= queue.length) {
+        set({ connecting: null });
+        return toast(t("החשבונות חוברו", "Accounts connected"));
+      }
+      set({ connecting: queue[i].key });
+      setTimeout(() => {
+        set((s) => ({ connected: [...new Set([...s.connected, ...queue[i].nets])] }));
+        step(i + 1);
+      }, 900);
+    };
+    step(0);
+  };
+
   const findVersion = (id) => S.versions.find((x) => x.id === id) || S.saved.find((x) => x.id === id);
-  const openPreview = (v) => set({ pv: v.id, note: "", applying: false, screen: "vpreview" });
+  const openPreview = (v) => set({ pv: v.id, note: "", picks: [], applying: false, screen: "vpreview" });
+  const updateVersion = (id, fn) => set((s) => {
+    const swap = (list) => list.map((x) => (x.id === id ? fn(x) : x));
+    return { versions: swap(s.versions), saved: swap(s.saved), chosen: s.chosen?.id === id ? fn(s.chosen) : s.chosen };
+  });
+  // אפקט מוכן: מוחל מיד, בלי לשלוח
+  const applyEffect = (v, [key, he, en, fields]) => {
+    updateVersion(v.id, (x) => ({ ...x, fx: withLook(x.fx, key, [he, en], fields) }));
+    toast(key === "none" ? t("האפקט הוסר", "Effect removed") : t(`אפקט: ${he}`, `Effect: ${en}`));
+  };
+  // מצב AI: אפקט חדש בכל לחיצה
+  const aiMode = (v) => {
+    const e = aiEffect(S.aiN + 1);
+    set({ aiN: S.aiN + 1 });
+    updateVersion(v.id, (x) => ({ ...x, fx: withLook(x.fx, e.key, [e.he, e.en], e.fields) }));
+    toast(t(`✨ ${e.he} — לחצו שוב לאפקט אחר`, `✨ ${e.en} — tap again for another`));
+  };
+  // ההערה הנשלחת: התיקונים המהירים שנבחרו ואחריהם הטקסט החופשי
+  const composedNote = [...S.picks.map((k) => { const q = QUICK_NOTES.find((x) => x[0] === k); return t(q[2], q[3]); }), S.note.trim()].filter(Boolean).join(", ");
   const applyNote = (v) => {
-    const note = S.note.trim();
+    const note = composedNote;
     if (!note || S.applying) return;
-    set({ applying: true });
+    set({ applying: true, picks: [] });
     setTimeout(() => {
-      const nv = reviseVersion(v, note);
+      const { version: nv, applied } = reviseVersion(v, note);
       const swap = (list) => list.map((x) => (x.id === v.id ? nv : x));
       set((s) => ({ versions: swap(s.versions), saved: swap(s.saved), chosen: s.chosen?.id === v.id ? nv : s.chosen, note: "", applying: false }));
-      toast(t("הגרסה עודכנה — מנגנים אותה מחדש", "Version updated — playing it again"));
-    }, 1600);
+      // אומרים בדיוק מה בוצע, ומה מחכה למנוע ה-AI
+      toast(applied.length
+        ? t(`בוצע: ${applied.map((a) => a[0]).join(", ")}`, `Done: ${applied.map((a) => a[1]).join(", ")}`)
+        : t("ההערה נשמרה. שינוי כזה יבוצע כשמנוע העריכה יחובר.", "Note saved. This kind of change will apply once the editing engine is connected."));
+    }, 1200);
   };
 
   const toPublish = (v) => set({ chosen: v, caption: caps[S.cap].text, screen: "publish" });
@@ -696,6 +951,8 @@ export default function GilosApp() {
         quiz: { ...s.quiz, [q.k]: q.multi ? toggle(s.quiz[q.k], o) : o },
         ...(q.k === "type" ? { tags: tagsFor(o, lang).slice(0, 4) } : {}),
       }));
+      const groups = q.connect ? connectGroups(S.quiz.nets) : [];
+      const pending = groups.filter((g) => !g.nets.every((n) => S.connected.includes(n)));
       const tagPool = [...new Set([...tagsFor(S.quiz.type, lang), ...S.tags])];
       const addTag = (e) => {
         e?.preventDefault();
@@ -727,6 +984,31 @@ export default function GilosApp() {
                   <input autoFocus aria-label={t("פירוט אחר", "Other details")} value={S.other[q.k]} onChange={(e) => set((s) => ({ other: { ...s.other, [q.k]: e.target.value } }))} placeholder={t("כתבו כאן במילים שלכם", "Write it in your own words")} />
                 )}
               </>
+            )}
+            {q.connect && !groups.length && <div className="empty">{t("לא נבחרו רשתות. אפשר לחזור צעד אחורה ולבחור, או לחבר בהמשך בהגדרות.", "No networks selected. Go back a step to pick some, or connect later in Settings.")}</div>}
+            {q.connect && groups.length > 0 && (
+                <>
+                  <button className="btn btn-primary btn-sm" disabled={!pending.length || !!S.connecting} onClick={() => connectMany(pending)}>
+                    {pending.length ? t(`⚡ חיבור הכול (${pending.length})`, `⚡ Connect all (${pending.length})`) : t("✓ הכול מחובר", "✓ All connected")}
+                  </button>
+                  {groups.map((g) => {
+                    const done = g.nets.every((n) => S.connected.includes(n)), busy = S.connecting === g.key;
+                    return (
+                      <div key={g.key} className={cx("card row connrow", done && "done")}>
+                        <span className="row start" style={{ gap: 12, minWidth: 0 }}>
+                          <span className="netbadge" style={{ background: g.bg, color: g.fg || "#fff" }} aria-hidden="true">{g.mark}</span>
+                          <span style={{ minWidth: 0 }}>
+                            <h3 className="ltr" style={{ textAlign: "start" }}>{g.nets.join(" + ")}</h3>
+                            <span className="muted small">{g.meta ? t("חיבור אחד לשתיהן, דרך חשבון מטא", "One connection for both, via your Meta account") : t("התחברות לחשבון ואישור הרשאה", "Log in and approve access")}</span>
+                          </span>
+                        </span>
+                        {done ? <span className="small" style={{ color: "var(--green)", flex: "none" }}>✓ {t("מחובר", "Connected")}</span>
+                          : <button className="chip small" style={{ color: "#fff", minHeight: 34, flex: "none" }} disabled={!!S.connecting} onClick={() => connectMany([g])}>{busy ? t("מתחבר…", "Connecting…") : t("חיבור", "Connect")}</button>}
+                      </div>
+                    );
+                  })}
+                  <span className="muted small">{t("🔒 אנחנו לא רואים ולא שומרים את הסיסמאות שלכם. אפשר לנתק בכל רגע בהגדרות.", "🔒 We never see or store your passwords. You can disconnect any time in Settings.")}</span>
+                </>
             )}
             {q.tags && (
               <>
@@ -871,13 +1153,31 @@ export default function GilosApp() {
         failed: t("לא הצלחנו לפתוח את המצלמה. ייתכן שאפליקציה אחרת משתמשת בה.", "We couldn't open the camera. Another app may be using it."),
       }[S.camError];
       const mmss = `${Math.floor(S.recSec / 60)}:${String(S.recSec % 60).padStart(2, "0")}`;
+      const digital = S.camHW ? 1 : S.camZoom;
+      const frameAspect = ratioValue || (S.camDims ? S.camDims.w / S.camDims.h : 3 / 4);
+      const zl = (z) => `${String(z).replace(/^0\./, ".")}×`;
+      const busy = S.recording || S.countdown > 0;
       return (
         <section className="screen camscreen">
-          <video ref={videoRef} className={cx("campreview", S.camFacing === "user" && "mirror", !S.camReady && "dim")} autoPlay muted playsInline />
+          <div className="campane" onTouchStart={onPinchStart} onTouchMove={onPinchMove} onTouchEnd={onPinchEnd}>
+            <div className="camframe" style={{ aspectRatio: String(frameAspect) }}>
+              <video ref={videoRef} className={cx("campreview", !S.camReady && "dim")} autoPlay muted playsInline
+                onLoadedMetadata={(e) => set({ camDims: { w: e.currentTarget.videoWidth, h: e.currentTarget.videoHeight } })}
+                style={{ transform: `${S.camFacing === "user" ? "scaleX(-1) " : ""}scale(${digital})` }} />
+              {S.camGrid && <span className="camgrid" aria-hidden="true" />}
+              {S.countdown > 0 && <span className="countdown" aria-live="assertive">{S.countdown}</span>}
+            </div>
+          </div>
           <div className="top camtop">
             <Back onClick={leaveCamera} label={t("חזרה", "Back")} />
-            {S.recording ? <span className="recbadge ltr">● {mmss}</span> : <h3>{t("מצלמה", "Camera")}</h3>}
-            <span className="spacer" />
+            {S.recording ? <span className="recbadge ltr">● {mmss}</span> : <span />}
+            <div className="camtools">
+              {S.camTorchOK && <button className={cx("camtool", S.camTorch && "on")} onClick={toggleTorch} aria-pressed={S.camTorch} aria-label={t("פנס", "Flash")}><Glyph name="flash" size={18} /></button>}
+              <button className={cx("camtool", S.camTimer && "on")} disabled={busy} onClick={() => set({ camTimer: S.camTimer === 0 ? 3 : S.camTimer === 3 ? 10 : 0 })} aria-label={t(`טיימר: ${S.camTimer || "כבוי"}`, `Timer: ${S.camTimer || "off"}`)}>
+                <Glyph name="timer" size={18} />{S.camTimer ? <small>{S.camTimer}</small> : null}
+              </button>
+              <button className={cx("camtool", S.camGrid && "on")} onClick={() => set({ camGrid: !S.camGrid })} aria-pressed={S.camGrid} aria-label={t("קווי רשת", "Grid lines")}><Glyph name="grid" size={18} /></button>
+            </div>
           </div>
           {S.camError ? (
             <div className="card stack camerr" role="alert">
@@ -891,12 +1191,31 @@ export default function GilosApp() {
             </div>
           ) : !S.camReady && <div className="camwait muted">{t("פותחים את המצלמה…", "Opening the camera…")}</div>}
           <div className="camcontrols">
-            {!S.recording && <Seg value={S.camMode} onChange={(camMode) => set({ camMode, camReady: false })} options={[["photo", t("תמונה", "Photo")], ["video", t("וידאו", "Video")]]} />}
+            {S.camReady && (
+              <div className="zoombar" role="group" aria-label={t("זום", "Zoom")}>
+                {zoomPresets.map((p) => (
+                  <button key={p} className={cx("zoomchip", Math.abs(S.camZoom - p) < 0.05 && "on")} onClick={() => setZoom(p)} aria-label={t(`זום ${p}`, `Zoom ${p}`)}>{zl(p)}</button>
+                ))}
+                {!zoomPresets.some((p) => Math.abs(S.camZoom - p) < 0.05) && <span className="zoomchip on">{zl(S.camZoom)}</span>}
+              </div>
+            )}
+            {S.camReady && (
+              <input type="range" className="zoomslider" min={zoomRange.min} max={zoomRange.max} step="0.1" value={S.camZoom}
+                onChange={(e) => setZoom(+e.target.value)} aria-label={t("זום", "Zoom")} dir="ltr" />
+            )}
+            {!busy && (
+              <div className="ratiobar">
+                {RATIOS.map(([k]) => (
+                  <button key={k} className={cx("ratiochip", S.camRatio === k && "on")} onClick={() => set({ camRatio: k })}>{k === "full" ? t("מלא", "Full") : k}</button>
+                ))}
+              </div>
+            )}
+            {!busy && <Seg value={S.camMode} onChange={(camMode) => set({ camMode, camReady: false })} options={[["photo", t("תמונה", "Photo")], ["video", t("וידאו", "Video")]]} />}
             <div className="camrow">
               <span className="camside small">{S.media.length}/{MAX_MEDIA}</span>
               <button className={cx("shutter", S.camMode === "video" && "vid", S.recording && "rec")} disabled={!S.camReady} onClick={shutter}
-                aria-label={S.camMode === "photo" ? t("צילום תמונה", "Take photo") : S.recording ? t("עצירת הקלטה", "Stop recording") : t("התחלת הקלטה", "Start recording")} />
-              <button className="camside flip" disabled={S.recording} onClick={() => set({ camFacing: S.camFacing === "user" ? "environment" : "user", camReady: false })} aria-label={t("החלפת מצלמה", "Switch camera")}>
+                aria-label={S.countdown ? t("ביטול הטיימר", "Cancel timer") : S.camMode === "photo" ? t("צילום תמונה", "Take photo") : S.recording ? t("עצירת הקלטה", "Stop recording") : t("התחלת הקלטה", "Start recording")} />
+              <button className="camside flip" disabled={busy} onClick={() => set({ camFacing: S.camFacing === "user" ? "environment" : "user", camReady: false })} aria-label={t("החלפת מצלמה", "Switch camera")}>
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" /><path d="M9.5 12.5a2.8 2.8 0 0 1 5-1.5M14.5 14a2.8 2.8 0 0 1-5 1.2" /><path d="M14.6 9.6v1.6h-1.6M9.4 16.6V15h1.6" /></svg>
               </button>
             </div>
@@ -923,9 +1242,10 @@ export default function GilosApp() {
           {S.versions.length ? S.versions.map((v, i) => (
             <div key={v.id} className={cx("card ver", v.saved && "saved", S.gone === v.id && "gone")} style={{ animationDelay: i * 90 + "ms" }}>
               <Thumb g={v.g} style={{ height: 148 }}>
-                <Cover img={v.img} vid={v.vid} g={v.g} />
-                <span className="play">▶</span><span className="dur">{v.dur}</span>
-                {S.subs && <span className="subs" />}{S.watermark && <span className="wm">LOGO</span>}
+                <Cover img={v.img} vid={v.vid} g={v.g} fx={v.fx} />
+                {verKind(v) === "video" && <span className="play">▶</span>}
+                {(v.fx?.subs ?? S.subs) && <span className="subs" />}{(v.fx?.logo ?? S.watermark) && <span className="wm">LOGO</span>}
+                <KindBadge kind={verKind(v)} dur={v.dur} label={verKind(v) === "image" ? t("תמונה", "Photo") : t("סרטון", "Video")} />
                 <button className="thumbhit" aria-label={t(`תצוגה מקדימה ותיקונים לגרסה ${i + 1}`, `Preview and edit version ${i + 1}`)} onClick={() => openPreview(v)} />
               </Thumb>
               <div className="ver-body">
@@ -963,27 +1283,56 @@ export default function GilosApp() {
           <div className="scroll" style={{ gap: 12 }}>
             <div className={cx("vplayer", S.applying && "busy")} style={{ "--g": v.g }}>
               {/* הסרטון מתנגן פעם אחת ונעצר. אחרי תיקון הוא נטען מחדש (key חדש) ומתנגן שוב */}
-              {v.vid ? <video key={`${v.id}-${v.rev}`} src={v.vid} autoPlay muted playsInline controls />
-                : v.img ? <img key={`${v.id}-${v.rev}`} src={v.img} alt="" /> // eslint-disable-line @next/next/no-img-element
+              {v.vid ? <video key={`${v.id}-${v.rev}`} src={v.vid} autoPlay muted playsInline controls style={{ filter: fxFilter(v.fx) }} />
+                : v.img ? <img key={`${v.id}-${v.rev}`} src={v.img} alt="" style={{ filter: fxFilter(v.fx) }} /> // eslint-disable-line @next/next/no-img-element
                 : <div className="vplaceholder">{tr(v.name)}</div>}
-              <span className="tint" style={{ background: v.g }} />
-              {S.subs && <span className="vsubs" dir="auto">{(S.caption || caps[S.cap].text).slice(0, 42)}</span>}
-              {S.watermark && <span className="wm">LOGO</span>}
+              {fxTint(v.fx) && <span className="tint" style={{ background: v.g }} />}
+              {(v.fx?.subs ?? S.subs) && <span className={cx("vsubs", v.fx?.bigSubs && "big")} dir="auto">{(S.caption || caps[S.cap].text).slice(0, 42)}</span>}
+              {(v.fx?.logo ?? S.watermark) && <span className="wm">LOGO</span>}
+              <KindBadge kind={verKind(v)} dur={v.vid ? null : v.dur} label={verKind(v) === "image" ? t("תמונה", "Photo") : t("סרטון", "Video")} />
               {v.rev > 1 && <span className="revbadge">{t(`תיקון ${v.rev - 1}`, `Edit ${v.rev - 1}`)}</span>}
               {S.applying && <div className="vapplying"><span className="ring" style={{ width: 54, height: 54 }} /><span>{t("מעדכנים את הגרסה…", "Updating this version…")}</span></div>}
+            </div>
+            <div className="card stack">
+              <div className="row"><h3>{t("אפקטים", "Effects")}</h3>{v.fx?.lookName && <span className="small" style={{ color: "var(--yellow)" }}>{t(v.fx.lookName[0], v.fx.lookName[1])}</span>}</div>
+              <HScroll label={t("אפקטים", "Effects")} prev={t("הקודם", "Previous")} next={t("הבא", "Next")}>
+                <button className={cx("tile fxtile ai", v.fx?.look?.startsWith("ai-") && "on")} onClick={() => aiMode(v)} aria-label={t("מצב AI: אפקט חדש בכל לחיצה", "AI mode: a new effect on every tap")}>
+                  <span className="fxthumb aiglow" aria-hidden="true"><Glyph name="sparkle" size={28} sw={1.7} /></span><span className="tilelabel">{t("מצב AI", "AI mode")}</span>
+                </button>
+                {EFFECTS.map((e) => {
+                  const [key, he, en, fields] = e, on = (v.fx?.look || "none") === key;
+                  return (
+                    <button key={key} className={cx("tile fxtile", on && "on")} aria-pressed={on} onClick={() => !on && applyEffect(v, e)}>
+                      <span className="fxthumb" style={{ "--g": v.g }}>
+                        {v.img ? <img src={v.img} alt="" style={{ filter: fxFilter(fields) }} /> // eslint-disable-line @next/next/no-img-element
+                          : v.vid ? <video src={`${v.vid}#t=0.1`} muted playsInline preload="metadata" style={{ filter: fxFilter(fields) }} />
+                          : <span className="fxswatch" style={{ filter: fxFilter(fields) }} />}
+                      </span>
+                      <span className="tilelabel">{t(he, en)}</span>
+                    </button>
+                  );
+                })}
+              </HScroll>
             </div>
             <div className="card stack">
               <h3>{t("הערות ותיקונים לגרסה", "Notes and fixes for this version")}</h3>
               {v.notes?.length > 0 && (
                 <ol className="notelist">{v.notes.map((n, i) => (<li key={i} dir="auto"><span className="muted small">{t(`תיקון ${i + 1}:`, `Edit ${i + 1}:`)}</span> {n}</li>))}</ol>
               )}
-              <div className="tags">
-                {QUICK_NOTES.map(([he, eng]) => (
-                  <button key={he} className="chip small" onClick={() => set((s) => ({ note: s.note ? `${s.note}, ${t(he, eng)}` : t(he, eng) }))}>＋ {t(he, eng)}</button>
-                ))}
-              </div>
-              <textarea dir="auto" style={{ height: 84, fontSize: 14 }} aria-label={t("הערות ותיקונים", "Notes and fixes")} value={S.note} onChange={(e) => set({ note: e.target.value })} placeholder={t("מה לשנות? למשל: לקצר את הפתיחה, להגדיל את הכיתוב ולהחליף למוזיקה רגועה", "What should change? e.g. trim the opening, enlarge the captions and switch to calmer music")} />
-              <button className="btn btn-primary btn-sm" disabled={!S.note.trim() || S.applying} onClick={() => applyNote(v)}>{S.applying ? t("מעדכנים…", "Updating…") : t("✨ שליחת התיקון", "✨ Send the fix")}</button>
+              <span className="muted small">{t("תיקונים מהירים — לחיצה בוחרת, לחיצה נוספת מבטלת", "Quick fixes — tap to pick, tap again to remove")}</span>
+              <HScroll label={t("תיקונים מהירים", "Quick fixes")} prev={t("הקודם", "Previous")} next={t("הבא", "Next")}>
+                {QUICK_NOTES.map(([k, from, to, he, eng]) => {
+                  const on = S.picks.includes(k);
+                  return (
+                    <button key={k} className={cx("tile", on && "on")} aria-pressed={on} disabled={S.applying} onClick={() => set((s) => ({ picks: toggle(s.picks, k) }))}>
+                      <GlyphBadge name={k} from={from} to={to} /><span className="tilelabel">{t(he, eng)}</span>
+                    </button>
+                  );
+                })}
+              </HScroll>
+              <textarea dir="auto" style={{ height: 76, fontSize: 14 }} aria-label={t("הערות ותיקונים", "Notes and fixes")} value={S.note} onChange={(e) => set({ note: e.target.value })} placeholder={t("ועוד משהו במילים שלכם? למשל: להחליף את המוזיקה, להתחיל מהרגע השני", "Anything else in your own words? e.g. change the music, start from the second moment")} />
+              {composedNote && <span className="muted small" dir="auto">{t("יישלח:", "Will send:")} {composedNote}</span>}
+              <button className="btn btn-primary btn-sm" disabled={!composedNote || S.applying} onClick={() => applyNote(v)}>{S.applying ? t("מעדכנים…", "Updating…") : t("✨ שליחת התיקון", "✨ Send the fix")}</button>
             </div>
           </div>
           <div className="acts">
@@ -1000,7 +1349,7 @@ export default function GilosApp() {
         {top(t("פרסום", "Publish"), "versions")}
         <div className="scroll" style={{ gap: 11 }}>
           <div style={{ display: "grid", gridTemplateColumns: "76px minmax(0, 1fr)", gap: 10, flex: "none" }}>
-            <Thumb g={S.chosen?.g} style={{ height: 112 }}><Cover img={S.chosen?.img} vid={S.chosen?.vid} g={S.chosen?.g} /></Thumb>
+            <Thumb g={S.chosen?.g} style={{ height: 112 }}><Cover img={S.chosen?.img} vid={S.chosen?.vid} g={S.chosen?.g} fx={S.chosen?.fx} /></Thumb>
             <textarea dir="auto" style={{ height: 112, fontSize: 14 }} aria-label={t("כיתוב", "Caption")} value={S.caption} onChange={(e) => set({ caption: e.target.value })} />
           </div>
           <div className="tags">
@@ -1076,7 +1425,7 @@ export default function GilosApp() {
             <h3 style={{ marginTop: 6 }}>{t("גרסאות שמורות", "Saved versions")}</h3>
             {S.saved.length ? S.saved.map((v) => (
               <div key={v.id} className="card row">
-                <span className="row"><Thumb g={v.g} style={{ width: 36, height: 46 }} /><span><h3>{tr(v.name)}</h3><span className="muted ltr" style={{ fontSize: 12 }}>{v.dur}</span></span></span>
+                <span className="row"><Thumb g={v.g} style={{ width: 36, height: 46 }} /><span><h3>{tr(v.name)}</h3><span className="muted" style={{ fontSize: 12 }}>{verKind(v) === "image" ? t("תמונה", "Photo") : <>{t("סרטון", "Video")} · <span className="ltr">{v.dur}</span></>}</span></span></span>
                 <button className="act pub fixed" onClick={() => toPublish(v)}>{t("פרסום", "Publish")}</button>
               </div>
             )) : <div className="muted" style={{ fontSize: 13.5 }}>{t("גרסאות שתשמרו במסך הבחירה יופיעו כאן.", "Versions you save on the picker screen will appear here.")}</div>}
@@ -1114,7 +1463,7 @@ export default function GilosApp() {
         <div className="scroll">
           <h3>{t("חשבונות מחוברים", "Connected accounts")}</h3>
           {/* TODO(שלב 5): חיבור אמיתי דרך ההתחברות של מטא */}
-          {NETS.map((x) => {
+          {[...new Set([...NETS.map((x) => x.n), ...S.quiz.nets, ...S.connected])].filter((n) => NET_STYLE[n]).map((n) => ({ n, c: color(n) })).map((x) => {
             const on = S.connected.includes(x.n);
             const flip = () => { set({ connected: toggle(S.connected, x.n) }); toast(on ? t(`${x.n} נותק`, `${x.n} disconnected`) : t(`${x.n} חובר בהצלחה`, `${x.n} connected`)); };
             return (
