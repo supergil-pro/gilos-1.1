@@ -576,3 +576,29 @@ nav button { touch-action: manipulation; }
 .swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid #2a2a36; padding: 0; }
 .swatch.orig { background: conic-gradient(var(--blue), var(--red), var(--yellow), var(--green), var(--blue)); }
 .swatch.on { border-color: #fff; box-shadow: 0 0 0 2px var(--yellow); }
+
+/* ---------- בחירת שיר ---------- */
+.searchrow input { height: 48px; }
+.moodchip { flex: none; height: 34px; border-radius: 17px; border: 1px solid var(--line); background: #101019; color: #ddd; font-size: 13px; padding: 0 14px; scroll-snap-align: start; touch-action: manipulation; }
+.moodchip.on { border-color: var(--yellow); color: #fff; box-shadow: 0 0 9px rgba(255, 230, 0, 0.45); }
+.moodchip.mine { border-color: rgba(255, 230, 0, 0.45); }
+.trackrow { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
+.trackrow.chosen { border-color: var(--green); box-shadow: 0 0 9px rgba(57, 255, 20, 0.35); }
+.trackrow.compact { background: #0d0d15; }
+.playbtn { width: 40px; height: 40px; border-radius: 50%; flex: none; border: none; display: flex; align-items: center; justify-content: center; color: #fff; background: linear-gradient(135deg, #833AB4, #E1306C 55%, #F77737); box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35); padding: 0; }
+.playbtn.on { background: linear-gradient(135deg, #00B4FF, #00D9A6); }
+.trackinfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.tracktitle { font-size: 14px; font-weight: 700; }
+.tracktags { display: flex; gap: 4px; flex-wrap: wrap; }
+.lic { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 5px; background: rgba(57, 255, 20, 0.15); color: var(--green); direction: ltr; }
+.lic.by { background: rgba(255, 230, 0, 0.15); color: var(--yellow); }
+.ttag { font-size: 10px; color: var(--muted); background: #17171f; border-radius: 5px; padding: 1px 6px; }
+.favbtn { width: 34px; height: 34px; border-radius: 50%; border: none; background: none; color: var(--muted); display: flex; align-items: center; justify-content: center; padding: 0; flex: none; }
+.favbtn.on { color: var(--red); filter: drop-shadow(0 0 6px rgba(255, 51, 85, 0.6)); }
+.pickbtn { flex: none; min-height: 34px; color: #fff; }
+
+/* ---------- Soundza ---------- */
+.playbtn.ext { background: #1c1c28; border: 1px solid var(--line); text-decoration: none; }
+.lic.ai { background: rgba(176, 38, 255, 0.18); color: #d6a4ff; }
+.poweredby { display: block; font-size: 11.5px; color: var(--muted); text-decoration: none; margin: 4px auto 0; direction: ltr; }
+.poweredby:hover { color: #fff; }

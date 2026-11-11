@@ -63,7 +63,15 @@ const SOURCES = [
   ["מצלמה", "var(--red)", <g key="i"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" /><circle cx="12" cy="13" r="3.4" /></g>],
   ["קישור", "var(--green)", <g key="i"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></g>],
 ];
-const TRACKS = ["קצבי", "רגוע", "קיצי"];
+// מצבי רוח לחיפוש מוזיקה: [עברית, אנגלית, מילת החיפוש]. החיפוש במקורות הוא באנגלית
+const MOODS = [["קצבי", "Upbeat", "upbeat"], ["רגוע", "Calm", "calm"], ["שמח", "Happy", "happy"], ["אפי", "Epic", "epic"], ["לו-פיי", "Lo-fi", "lofi"], ["אלקטרוני", "Electronic", "electronic"], ["אקוסטי", "Acoustic", "acoustic"], ["היפ הופ", "Hip hop", "hip hop"], ["פופ", "Pop", "pop"], ["קיצי", "Summer", "summer"], ["רומנטי", "Romantic", "romantic"], ["פסנתר", "Piano", "piano"], ["דאנס", "Dance", "dance"], ["תופים", "Drums", "drums"]];
+// נקודת התחלה ל"בשבילך" לפני שיש היסטוריה: לפי הסגנון והתחום שנבחרו בשאלון
+const STYLE_TO_MUSIC = { "דינמי וקצבי": "upbeat", "נקי ומינימלי": "minimal", "חם ואישי": "acoustic", "יוקרתי": "elegant", "הומוריסטי": "funny", "טרנדי": "pop", "ניאון ומועדונים": "electronic", "רטרו / וינטג׳": "retro", "קולנועי": "cinematic", "צבעוני ושמח": "happy", "מקצועי ורשמי": "corporate", "טבעי ואותנטי": "acoustic" };
+const TYPE_TO_MUSIC = { "דיג׳יי ומוזיקה": "dance", "אירועים והפקות": "party", "אוכל ומסעדות": "jazz", "כושר ובריאות": "workout", "יופי וטיפוח": "chill", "אופנה": "fashion", "נדל״ן": "corporate" };
+// נגן ההאזנה המקדימה: אחד לכל האפליקציה
+const preview = { el: null };
+function playPreview(url, onEnd) { preview.el ||= new Audio(); preview.el.src = url; preview.el.onended = onEnd; return preview.el.play(); }
+function pausePreview() { preview.el?.pause(); }
 const SLOTS = ["היום 20:00", "מחר 09:00", "מחר 18:00"];
 const BEST_SLOT = "היום 20:00";
 const DAYS = { he: ["א", "ב", "ג", "ד", "ה", "ו", "ש"], en: ["S", "M", "T", "W", "T", "F", "S"] };
@@ -177,7 +185,8 @@ const INITIAL = {
   tags: [], myTag: "", offTags: [],
   prompt: "", tpl: null,
   media: [], linkOpen: false, linkUrl: "",
-  subs: true, watermark: true, sound: "lib", track: "קצבי", soundText: "",
+  subs: true, watermark: true, sound: "lib", track: null, soundText: "",
+  music: { terms: {}, favs: [], recent: [] }, mq: "", msrc: "soundza", gen: { loading: false, error: "", takes: [] }, mtab: "results", mres: { items: [], loading: false, error: "", q: "", page: 0, total: 0 }, playing: null,
   versions: [], gone: null, chosen: null, pstep: 0,
   cap: 0, caption: "",
   nets: ["Instagram", "Facebook"], format: "סטורי", when: "best", slot: SLOTS[1], repeat: false,
@@ -198,7 +207,7 @@ const INITIAL = {
   camFacing: "environment", camMode: "photo", camZoom: 1, camHW: null, camTorchOK: false, camTorch: false, camRatio: "full", camGrid: false, camTimer: 0, countdown: 0, camDims: null, camError: "", camReady: false, recording: false, recSec: 0,
 };
 // השדות ששייכים לפרופיל (ולא לחשבון): הגדרות, שאלון, האשטגים, חשבונות מחוברים ולוח תוכן
-const PROFILE_KEYS = ["logoAR", "logoCfg", "quiz", "other", "tags", "offTags", "prompt", "tpl", "subs", "watermark", "sound", "track", "soundText", "nets", "format", "queue", "saved", "connected", "intro", "logo", "fixed"];
+const PROFILE_KEYS = ["music", "logoAR", "logoCfg", "quiz", "other", "tags", "offTags", "prompt", "tpl", "subs", "watermark", "sound", "track", "soundText", "nets", "format", "queue", "saved", "connected", "intro", "logo", "fixed"];
 const snapshot = (s) => Object.fromEntries(PROFILE_KEYS.map((k) => [k, s[k]]));
 const NEW_PROFILE = { ...snapshot(INITIAL), queue: [], connected: [] };
 const WORK_RESET = { versions: [], chosen: null, media: [], done: null, qi: 0 };
@@ -457,7 +466,10 @@ export default function GilosApp() {
   const chev = t("‹", "›");
 
   const set = (patch) => setS((s) => ({ ...s, ...(typeof patch === "function" ? patch(s) : patch) }));
-  const go = (screen) => set({ screen, confirmDelete: false });
+  const go = (screen) => {
+    if (screen !== "music") pausePreview();
+    set({ screen, confirmDelete: false, playing: null });
+  };
   const toast = (m) => {
     setToastMsg(m); setToastOn(true);
     clearTimeout(toastTimer.current);
@@ -821,6 +833,116 @@ export default function GilosApp() {
       countRef.current = setTimeout(() => (n > 1 ? tick(n - 1) : (set({ countdown: 0 }), fire())), 1000);
     };
     tick(S.camTimer);
+  };
+
+  /* ---------- מוזיקה: חיפוש, האזנה, בחירה וזיכרון סגנון ---------- */
+  const mus = { terms: {}, favs: [], recent: [], ...(S.music || {}) };
+  const track = S.track && typeof S.track === "object" ? S.track : null;
+  // הסגנון של המשתמש: המונחים שחיפש ובחר הכי הרבה, ואם אין עדיין — לפי הסגנון והתחום מהשאלון
+  const styleTerms = Object.entries(mus.terms).sort((a, b) => b[1] - a[1]).map(([k]) => k).slice(0, 4);
+  const forYouQuery = styleTerms[0] || STYLE_TO_MUSIC[S.quiz.style] || TYPE_TO_MUSIC[S.quiz.type] || "upbeat";
+  const remember = (m, terms, item) => {
+    const next = { ...m, terms: { ...m.terms } };
+    terms.filter(Boolean).forEach((x) => { const k = x.toLowerCase().trim(); if (k) next.terms[k] = (next.terms[k] || 0) + 1; });
+    // שומרים רק את 30 המונחים הנפוצים, כדי שהזיכרון לא יגדל בלי סוף
+    next.terms = Object.fromEntries(Object.entries(next.terms).sort((a, b) => b[1] - a[1]).slice(0, 30));
+    if (item) next.recent = [item, ...m.recent.filter((x) => x.id !== item.id)].slice(0, 12);
+    return next;
+  };
+  const slim = (it) => ({ id: it.id, source: it.source, title: it.title, creator: it.creator, url: it.url, duration: it.duration, license: it.license, credit: it.credit, attribution: it.attribution, link: it.link, tags: (it.tags || []).slice(0, 4) });
+  const searchMusic = async (q, { page = 1, source = S.msrc, learn = true } = {}) => {
+    const query = (q || "").trim();
+    if (!query) return;
+    set((s) => ({ mq: query, mtab: "results", mres: { ...(page > 1 ? s.mres : { items: [] }), loading: true, error: "", q: query, page, source }, ...(learn && page === 1 ? { music: remember({ terms: {}, favs: [], recent: [], ...(s.music || {}) }, [query], null) } : {}) }));
+    try {
+      const res = await fetch(`/api/music?${new URLSearchParams({ q: query, source, page: String(page) })}`);
+      const data = await res.json();
+      set((s) => {
+        if (s.mres.q !== query || s.mres.source !== source) return {}; // תוצאה של חיפוש ישן
+        const items = page > 1 ? [...s.mres.items, ...(data.items || []).filter((n) => !s.mres.items.some((o) => o.id === n.id))] : data.items || [];
+        return { mres: { ...s.mres, loading: false, error: data.error || "", items, total: data.total || 0, hasMore: data.hasMore, keyless: !!data.keyless, searchId: data.searchId || null } };
+      });
+    } catch {
+      set((s) => ({ mres: { ...s.mres, loading: false, error: "network" } }));
+    }
+  };
+  const openMusic = () => {
+    set({ screen: "music", mtab: "results" });
+    if (!S.mres.items.length) searchMusic(forYouQuery, { learn: false });
+  };
+  const stopPreview = pausePreview;
+  const togglePlay = (it) => {
+    if (S.playing === it.id) { stopPreview(); return set({ playing: null }); }
+    playPreview(it.url, () => set({ playing: null })).then(() => set({ playing: it.id })).catch(() => { set({ playing: null }); toast(t("לא הצלחנו לנגן את הקטע הזה", "Couldn't play this track")); });
+  };
+  const toggleFav = (it) => set((s) => {
+    const m = { terms: {}, favs: [], recent: [], ...(s.music || {}) };
+    const on = m.favs.some((x) => x.id === it.id);
+    return { music: on ? { ...m, favs: m.favs.filter((x) => x.id !== it.id) } : remember({ ...m, favs: [slim(it), ...m.favs].slice(0, 40) }, (it.tags || []).slice(0, 2), null) };
+  });
+  const chooseTrack = (it) => {
+    stopPreview();
+    set((s) => ({ track: slim(it), sound: "lib", playing: null, screen: "upload", music: remember({ terms: {}, favs: [], recent: [], ...(s.music || {}) }, (it.tags || []).slice(0, 3), slim(it)) }));
+    toast(it.credit ? t("נבחר. הרישיון דורש קרדיט ליוצר — נוסיף אותו לכיתוב.", "Selected. The license requires crediting the artist — we'll add it to the caption.") : t("השיר נבחר", "Track selected"));
+  };
+  const fmtDur = (sec) => (sec ? `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}` : "");
+
+  // יצירת צליל מטקסט ב-Soundza (AI): 3 גרסאות של 3 שניות, ובוחרים אחת
+  const genError = (code) => ({
+    not_configured: t("יצירת צלילים צריכה את מפתח Soundza ב-Vercel.", "Sound generation needs the Soundza key in Vercel."),
+    rate_limited: t("הגענו למגבלת היצירות השבועית. נסו שוב מאוחר יותר.", "We hit the weekly generation limit. Try again later."),
+    generator_busy: t("המחולל עמוס כרגע. נסו שוב בעוד רגע.", "The generator is busy. Try again in a moment."),
+  }[code] || t("היצירה נכשלה. נסו תיאור אחר.", "Generation failed. Try another description."));
+  const generateSound = async () => {
+    const prompt = S.soundText.trim();
+    if (!prompt || S.gen.loading) return;
+    set({ gen: { loading: true, error: "", takes: [] } });
+    try {
+      let res = await fetch("/api/soundza/generate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt, duration_seconds: 3, takes: 3 }) });
+      let data = await res.json();
+      // עבודה ארוכה עונה 202: בודקים כל 2 שניות, עד דקה
+      for (let i = 0; i < 30 && (res.status === 202 || data.status === "running" || data.status === "queued"); i++) {
+        await new Promise((ok) => setTimeout(ok, 2000));
+        res = await fetch(`/api/soundza/generate?id=${encodeURIComponent(data.id)}`);
+        data = await res.json();
+      }
+      if (!res.ok || data.status === "failed" || !data.takes?.length) return set({ gen: { loading: false, error: genError(data.error?.code), takes: [] } });
+      const takes = data.takes.map((tk, i) => ({
+        id: `gen-${data.id || "x"}-${i}`, source: "soundza", title: `${prompt} · ${i + 1}`, creator: "Soundza AI",
+        url: tk.preview_url || tk.url, duration: tk.duration_seconds ? Math.round(tk.duration_seconds) : 3,
+        license: "Soundza", credit: false, ai: true, link: "https://soundza.com", tags: ["ai"],
+      }));
+      set({ gen: { loading: false, error: "", takes } });
+    } catch {
+      set({ gen: { loading: false, error: genError(), takes: [] } });
+    }
+  };
+  const trackRow = (it, compact = false) => {
+    const fav = mus.favs.some((x) => x.id === it.id), playing = S.playing === it.id, chosen = track?.id === it.id;
+    return (
+      <div key={it.id} className={cx("card trackrow", chosen && "chosen", compact && "compact")}>
+        {it.url ? (
+          <button className={cx("playbtn", playing && "on")} onClick={() => togglePlay(it)} aria-label={playing ? t("עצירה", "Pause") : t(`האזנה: ${it.title}`, `Listen: ${it.title}`)}>
+            {playing ? <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></svg>
+              : <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>}
+          </button>
+        ) : (
+          // בלי מפתח Soundza אין קובץ האזנה: פותחים את עמוד הצליל באתר שלהם
+          <a className="playbtn ext" href={it.link} target="_blank" rel="noopener noreferrer" aria-label={t(`האזנה באתר Soundza: ${it.title}`, `Listen on Soundza: ${it.title}`)}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></svg>
+          </a>
+        )}
+        <div className="trackinfo">
+          <div className="ellipsis tracktitle" dir="auto">{it.title}</div>
+          <div className="muted small ellipsis" dir="auto">{it.creator}{it.duration ? <> · <span className="ltr">{fmtDur(it.duration)}</span></> : null}</div>
+          {!compact && <div className="tracktags"><span className={cx("lic", it.credit && "by")}>{it.license}</span>{it.ai && <span className="lic ai" title={t("נוצר ב-AI", "AI-generated")}>AI</span>}{it.bpm ? <span className="ttag ltr">{it.bpm} BPM</span> : null}{(it.tags || []).slice(0, 3).map((g) => <span key={g} className="ttag ltr">{g}</span>)}</div>}
+        </div>
+        {!compact && <button className={cx("favbtn", fav && "on")} onClick={() => toggleFav(it)} aria-pressed={fav} aria-label={fav ? t("הסרה מהמועדפים", "Remove from favorites") : t("הוספה למועדפים", "Add to favorites")}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill={fav ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinejoin="round" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z" /></svg>
+        </button>}
+        {!compact && <button className="chip small pickbtn" onClick={() => chooseTrack(it)}>{chosen ? t("✓ נבחר", "✓ Chosen") : t("בחירה", "Use")}</button>}
+      </div>
+    );
   };
 
   // תצוגה מקדימה של גרסה ותיקונים לפי הערות
@@ -1206,10 +1328,26 @@ export default function GilosApp() {
             <div className="card row"><div><h3>{t("כתוביות אוטומטיות", "Auto captions")}</h3><span className="muted small">{t("כיתוב מונפש לפי מה שנאמר בסרטון", "Animated captions from what's said in the video")}</span></div><Switch on={S.subs} onClick={() => set({ subs: !S.subs })} label={t("כתוביות אוטומטיות", "Auto captions")} /></div>
             <div className="card row"><div><h3>{t("לוגו / סימן מים", "Logo / watermark")}</h3><span className="muted small">{logoImg ? t("הלוגו שהעלית בהגדרות", "The logo you uploaded in Settings") : t("עוד לא הועלה לוגו — אפשר להעלות בהגדרות", "No logo yet — upload one in Settings")}</span></div><Switch on={S.watermark} onClick={() => set({ watermark: !S.watermark })} label={t("לוגו או סימן מים", "Logo or watermark")} /></div>
             <div className="card stack">
-              <div className="row"><h3>{t("סאונד", "Sound")}</h3><span className="muted ltr" style={{ fontSize: 11.5 }}>Soundza</span></div>
+              <div className="row"><h3>{t("סאונד", "Sound")}</h3><a className="muted ltr poweredby" style={{ fontSize: 11.5, margin: 0 }} href="https://soundza.com" target="_blank" rel="noopener noreferrer">Powered by soundza</a></div>
               <Seg value={S.sound} onChange={(sound) => set({ sound })} options={[["none", t("ללא", "None")], ["lib", t("ספרייה", "Library")], ["text", t("מטקסט", "From text")]]} />
-              {S.sound === "lib" && (<div className="grid3">{TRACKS.map((tk) => (<button key={tk} dir="auto" className={cx("chip small", tk === S.track && "on")} style={{ "--c": "var(--yellow)" }} onClick={() => set({ track: tk })}>♪ {tr(tk)}</button>))}</div>)}
-              {S.sound === "text" && (<input value={S.soundText} onChange={(e) => set({ soundText: e.target.value })} placeholder={t("תארו סאונד: קצבי, שמח, קיצי…", "Describe a sound: upbeat, happy, summery…")} />)}
+              {S.sound === "lib" && (track ? (
+                <div className="col" style={{ gap: 8 }}>
+                  {trackRow(track, true)}
+                  <button className="btn btn-sm btn-soft" onClick={openMusic}>♪ {t("החלפת שיר", "Change track")}</button>
+                  {track.credit && <span className="muted small">{t("הרישיון דורש קרדיט ליוצר. נוסיף אותו לכיתוב בפרסום.", "The license requires crediting the artist. We'll add it to the caption when publishing.")}</span>}
+                </div>
+              ) : <button className="btn btn-sm btn-primary" onClick={openMusic}>♪ {t("בחירת שיר — חיפוש בספרייה", "Pick a track — search the library")}</button>)}
+              {S.sound === "text" && (
+                <div className="col" style={{ gap: 8 }}>
+                  <form className="row" onSubmit={(e) => { e.preventDefault(); generateSound(); }}>
+                    <input dir="auto" value={S.soundText} onChange={(e) => set({ soundText: e.target.value })} placeholder={t("תארו צליל באנגלית: magic chime, whoosh…", "Describe a sound: magic chime, whoosh…")} aria-label={t("תיאור הצליל", "Sound description")} style={{ flex: 1 }} />
+                    <button type="submit" className="chip" style={{ color: "#fff", minHeight: 48, flex: "none" }} disabled={!S.soundText.trim() || S.gen.loading}>{S.gen.loading ? t("יוצר…", "Making…") : t("✨ יצירה", "✨ Create")}</button>
+                  </form>
+                  {S.gen.error && <span className="small" style={{ color: "var(--red)" }}>{S.gen.error}</span>}
+                  {S.gen.takes.map((it) => trackRow(it))}
+                  {S.gen.takes.length > 0 && <span className="muted small">{t("הצלילים נוצרו ב-AI ומסומנים ככאלה. עד 10 שניות לצליל.", "These sounds are AI-generated and labeled as such. Up to 10 seconds each.")}</span>}
+                </div>
+              )}
             </div>
           </div>
           <button className="btn btn-primary" disabled={!S.media.length} onClick={startProcess}>
@@ -1294,6 +1432,62 @@ export default function GilosApp() {
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" /><path d="M9.5 12.5a2.8 2.8 0 0 1 5-1.5M14.5 14a2.8 2.8 0 0 1-5 1.2" /><path d="M14.6 9.6v1.6h-1.6M9.4 16.6V15h1.6" /></svg>
               </button>
             </div>
+          </div>
+        </section>
+      );
+    },
+
+    /* 5ג. בחירת שיר */
+    music: () => {
+      const r = S.mres;
+      const errText = {
+        not_configured: t("Freesound עוד לא מחובר. כדי לחבר צריך מפתח חינמי מ-freesound.org, שנשמר ב-Vercel.", "Freesound isn't connected yet. It needs a free key from freesound.org, saved in Vercel."),
+        bad_key: t("מפתח Freesound לא תקין.", "The Freesound key isn't valid."),
+        rate_limited: t("הגענו למגבלת החיפושים לשעה. נסו שוב בעוד כמה דקות.", "We hit the search limit. Try again in a few minutes."),
+        source_failed: t("המקור לא זמין כרגע. נסו שוב.", "The source isn't available right now. Try again."),
+        network: t("אין חיבור לאינטרנט.", "No internet connection."),
+      }[r.error];
+      const list = S.mtab === "favs" ? mus.favs : S.mtab === "recent" ? mus.recent : r.items;
+      return (
+        <section className="screen" style={{ gap: 12 }}>
+          {top(t("בחירת שיר", "Pick a track"), "upload")}
+          <form className="row searchrow" onSubmit={(e) => { e.preventDefault(); searchMusic(S.mq); }}>
+            <input type="search" dir="auto" value={S.mq} onChange={(e) => set({ mq: e.target.value })} placeholder={t("חיפוש באנגלית: upbeat, piano, summer…", "Search: upbeat, piano, summer…")} aria-label={t("חיפוש שירים", "Search tracks")} style={{ flex: 1 }} />
+            <button type="submit" className="chip" style={{ color: "#fff", minHeight: 48, flex: "none" }} disabled={r.loading}>{t("חיפוש", "Search")}</button>
+          </form>
+          <HScroll label={t("מצבי רוח", "Moods")} prev={t("הקודם", "Previous")} next={t("הבא", "Next")}>
+            {[...styleTerms.filter((x) => !MOODS.some((m) => m[2] === x)).map((x) => [x, x, x, true]), ...MOODS].map(([he, en, q, mine]) => (
+              <button key={q} className={cx("moodchip", r.q === q && "on", mine && "mine")} onClick={() => searchMusic(q)}>{mine ? "★ " : ""}{t(he, en)}</button>
+            ))}
+          </HScroll>
+          {styleTerms.length > 0 && <span className="muted small">{t("הסגנון שלך:", "Your style:")} <span className="ltr">{styleTerms.join(" · ")}</span></span>}
+          <div className="row" style={{ gap: 8 }}>
+            <Seg value={S.mtab} onChange={(mtab) => set({ mtab })} options={[["results", t("תוצאות", "Results")], ["favs", t(`מועדפים (${mus.favs.length})`, `Favorites (${mus.favs.length})`)], ["recent", t("אחרונים", "Recent")]]} />
+          </div>
+          {S.mtab === "results" && (
+            <div className="row" style={{ gap: 8 }}>
+              <span className="muted small">{t("מקור:", "Source:")}</span>
+              <Seg value={S.msrc} onChange={(msrc) => { set({ msrc }); searchMusic(r.q || forYouQuery, { source: msrc, learn: false }); }} options={[["soundza", "Soundza"], ["openverse", "Openverse"], ["freesound", "Freesound"]]} />
+            </div>
+          )}
+          {S.mtab === "results" && r.keyless && S.msrc === "soundza" && (
+            <div className="card note small">{t("Soundza מחובר לחיפוש בלבד. כדי להאזין בתוך האפליקציה ולהשתמש בקבצים, צריך להוסיף את מפתח Soundza ב-Vercel. בינתיים כפתור החץ פותח את הצליל באתר שלהם.", "Soundza is connected for search only. To listen in the app and use the files, add the Soundza key in Vercel. Meanwhile, the arrow button opens the sound on their site.")}</div>
+          )}
+          <div className="scroll" style={{ gap: 8 }}>
+            {S.mtab === "results" && r.q && !r.loading && !r.error && <span className="muted small">{t(`${r.total} תוצאות ל-"${r.q}"`, `${r.total} results for "${r.q}"`)}</span>}
+            {S.mtab === "results" && errText && <div className="card note" role="alert">{errText}</div>}
+            {list.map((it) => trackRow(it))}
+            {S.mtab === "results" && r.loading && <div className="muted small tc" style={{ padding: 12 }}>{t("מחפשים…", "Searching…")}</div>}
+            {S.mtab === "results" && !r.loading && !r.error && r.items.length > 0 && (r.hasMore ?? r.items.length < r.total) && (
+              <button className="btn btn-outline btn-sm" onClick={() => searchMusic(r.q, { page: (r.page || 1) + 1, learn: false })}>{t("עוד תוצאות", "More results")}</button>
+            )}
+            {!list.length && !r.loading && !errText && (
+              <div className="empty">{S.mtab === "favs" ? t("עוד אין מועדפים. לחצו על הלב ליד שיר.", "No favorites yet. Tap the heart next to a track.") : S.mtab === "recent" ? t("עוד לא נבחרו שירים.", "No tracks chosen yet.") : t("לא נמצאו שירים. נסו מילה אחרת באנגלית.", "No tracks found. Try another word.")}</div>
+            )}
+            <span className="muted small" style={{ marginTop: 6 }}>{S.msrc === "soundza"
+              ? t("צלילי Soundza חופשיים לשימוש מסחרי, בלי צורך בקרדיט. צלילים שנוצרו ב-AI מסומנים AI.", "Soundza sounds are free for commercial use, no credit needed. AI-generated sounds are marked AI.")
+              : t("רק שירים ברישיון שמותר לשימוש מסחרי ולעריכה (CC0 או CC BY). ב-CC BY חובה לתת קרדיט ליוצר — נוסיף אותו לכיתוב.", "Only tracks licensed for commercial use and editing (CC0 or CC BY). CC BY requires crediting the artist — we'll add it to the caption.")}</span>
+            <a className="poweredby" href="https://soundza.com" target="_blank" rel="noopener noreferrer">Powered by soundza</a>
           </div>
         </section>
       );
@@ -1468,6 +1662,7 @@ export default function GilosApp() {
               <button key={tag} dir="auto" className={cx("chip small", !S.offTags.includes(tag) && "on")} style={{ "--c": "var(--green)", minHeight: 30 }} aria-pressed={!S.offTags.includes(tag)} onClick={() => set({ offTags: toggle(S.offTags, tag) })}>{tag}</button>
             ))}
           </div>
+          {S.sound === "lib" && track?.credit && <div className="card note small" dir="auto">🎵 {t("קרדיט שיתווסף לכיתוב:", "Credit added to the caption:")} {track.title} — {track.creator} ({track.license})</div>}
           <button className="btn btn-sm btn-soft" onClick={() => set((s) => { const cap = (s.cap + 1) % caps.length; return { cap, caption: caps[cap].text }; })}>✨ {t("כיתוב והאשטגים חדשים", "New caption and hashtags")}</button>
           <h3>{t("לאן?", "Where?")}</h3>
           <div className="grid4">{NETS.map((x) => (<button key={x.n} className={cx("chip small ltr", S.nets.includes(x.n) && "on")} style={{ "--c": x.c, fontSize: 11.5, padding: 2 }} onClick={() => set({ nets: toggle(S.nets, x.n) })}>{x.n}</button>))}</div>
@@ -1673,6 +1868,7 @@ export default function GilosApp() {
         </div>
         <div className="grow" />
         <div className="logo ltr tc" style={{ fontSize: 10.5, letterSpacing: 4, color: "#7d7d8d" }}>BY GILOS · 2026</div>
+        <a className="poweredby tc" href="https://soundza.com" target="_blank" rel="noopener noreferrer">Sounds: Powered by soundza</a>
       </section>
     ),
   };
