@@ -53,7 +53,6 @@ const IDEAS = [
 const SOURCES = [
   ["גלריה", "var(--blue)", <g key="i"><rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="8.5" cy="9.5" r="1.6" /><path d="M21 16l-5-5-8 8" /></g>],
   ["מצלמה", "var(--red)", <g key="i"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" /><circle cx="12" cy="13" r="3.4" /></g>],
-  ["מחשב", "var(--yellow)", <g key="i"><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></g>],
   ["קישור", "var(--green)", <g key="i"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></g>],
 ];
 const TRACKS = ["קצבי", "רגוע", "קיצי"];
@@ -553,7 +552,7 @@ export default function GilosApp() {
       return (
         <section className="screen">
           {top(t("העלאת מדיה", "Upload media"), "home")}
-          <div className="grid4">
+          <div className="grid3">
             {SOURCES.map(([s, c, icon]) => {
               const inner = (
                 <>
@@ -565,7 +564,7 @@ export default function GilosApp() {
               if (s === "קישור") return <button key={s} className={cx("src", S.linkOpen && "on")} style={{ "--c": c }} onClick={() => set({ linkOpen: !S.linkOpen })}>{inner}</button>;
               return (
                 <label key={s} className="src" style={{ "--c": c }}>
-                  <input type="file" accept="image/*,video/*" multiple={s !== "מצלמה"} capture={s === "מצלמה" ? "environment" : undefined} onChange={addFiles} aria-label={tr(s)} />
+                  <input type="file" accept="image/*,video/*" multiple={s === "גלריה"} capture={s === "מצלמה" ? "environment" : undefined} onChange={addFiles} aria-label={tr(s)} />
                   {inner}
                 </label>
               );
@@ -863,6 +862,7 @@ export default function GilosApp() {
   const isTab = TABS.some(([k]) => k === S.screen);
   return (
     <main className="app" dir={en ? "ltr" : "rtl"} lang={lang}>
+      <div className={cx("stars", S.screen === "open" && "strong")} aria-hidden="true"><span className="haze" /><span className="dust" /><i /></div>
       <div className="topbar">
         {activeProfile && S.screen !== "open" && S.screen !== "auth" ? (
           <button className="profname" onClick={openProfiles} aria-label={t(`פרופיל: ${profileName}. החלפת פרופיל`, `Profile: ${profileName}. Switch profile`)}>

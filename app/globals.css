@@ -337,3 +337,79 @@ label.src { cursor: pointer; position: relative; }
 .scorebox small { font-size: 10.5px; color: var(--muted); line-height: 1; }
 .scorebox:active .score { transform: scale(0.93); }
 .score { transition: transform 0.12s ease; }
+
+/* ---------- כוכבים מנצנצים ברקע: עדינים בכל מסך, חזקים יותר במסך הפתיחה ---------- */
+@keyframes twinkle { 0% { opacity: 0.2; } 100% { opacity: 1; } }
+.stars { position: absolute; inset: 0; pointer-events: none; opacity: 0.4; transition: opacity 0.8s ease; }
+.stars.strong { opacity: 1; }
+.stars::before, .stars::after, .stars i { content: ""; position: absolute; inset: 0; background-repeat: repeat; }
+.stars::before {
+  background-image:
+    radial-gradient(circle at 23px 31px, #fff 0 0.7px, transparent 1.4px),
+    radial-gradient(circle at 141px 12px, #cfe6ff 0 0.6px, transparent 1.3px),
+    radial-gradient(circle at 87px 118px, #fff 0 0.8px, transparent 1.5px),
+    radial-gradient(circle at 190px 167px, #fff 0 0.6px, transparent 1.2px),
+    radial-gradient(circle at 52px 201px, #fff6c2 0 0.7px, transparent 1.4px);
+  background-size: 230px 230px;
+  animation: twinkle 3.6s ease-in-out infinite alternate;
+}
+.stars::after {
+  background-image:
+    radial-gradient(circle at 70px 44px, #fff 0 0.6px, transparent 1.3px),
+    radial-gradient(circle at 250px 90px, #fff 0 0.8px, transparent 1.5px),
+    radial-gradient(circle at 168px 232px, #cfe6ff 0 0.7px, transparent 1.4px),
+    radial-gradient(circle at 12px 283px, #fff 0 0.6px, transparent 1.2px),
+    radial-gradient(circle at 296px 300px, #fff 0 0.7px, transparent 1.4px);
+  background-size: 330px 330px;
+  animation: twinkle 5.2s ease-in-out -2s infinite alternate-reverse;
+}
+/* שכבה נוספת של כוכבים גדולים וזוהרים, רק במסך הפתיחה */
+.stars i {
+  opacity: 0;
+  transition: opacity 0.8s ease;
+  background-image:
+    radial-gradient(circle at 44px 96px, #fff 0 1.1px, rgba(255, 255, 255, 0.25) 2px, transparent 4px),
+    radial-gradient(circle at 212px 38px, #9fd4ff 0 1.2px, rgba(30, 155, 255, 0.3) 2.2px, transparent 4.5px),
+    radial-gradient(circle at 318px 214px, #fff 0 1px, rgba(255, 255, 255, 0.25) 2px, transparent 4px),
+    radial-gradient(circle at 128px 290px, #fff3a6 0 1.1px, rgba(255, 230, 0, 0.25) 2.1px, transparent 4.2px),
+    radial-gradient(circle at 276px 356px, #b6ffb0 0 1px, rgba(57, 255, 20, 0.22) 2px, transparent 4px);
+  background-size: 390px 420px;
+}
+.stars.strong i { opacity: 1; animation: twinkle 2.8s ease-in-out -1s infinite alternate; }
+@media (prefers-reduced-motion: reduce) {
+  .stars::before, .stars::after, .stars.strong i { animation: none; }
+}
+
+/* ---------- שביל החלב: רצועה אלכסונית של אובך זוהר ואבק כוכבים צפוף ---------- */
+.stars { opacity: 0.6; }
+.stars.strong { opacity: 1; }
+.stars .haze {
+  position: absolute;
+  inset: -12%;
+  filter: blur(24px);
+  background:
+    radial-gradient(ellipse 46% 20% at 64% 36%, rgba(255, 238, 205, 0.26), transparent 70%),
+    radial-gradient(ellipse 42% 20% at 34% 64%, rgba(140, 120, 255, 0.22), transparent 70%),
+    radial-gradient(ellipse 30% 14% at 50% 50%, rgba(255, 255, 255, 0.16), transparent 70%),
+    linear-gradient(125deg, transparent 30%, rgba(80, 130, 255, 0.13) 41%, rgba(255, 255, 255, 0.2) 50%, rgba(175, 110, 255, 0.13) 59%, transparent 70%);
+}
+.stars .dust {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle at 11px 17px, rgba(255, 255, 255, 0.95) 0 0.5px, transparent 1px),
+    radial-gradient(circle at 37px 9px, rgba(255, 255, 255, 0.8) 0 0.45px, transparent 0.9px),
+    radial-gradient(circle at 29px 41px, rgba(200, 225, 255, 0.9) 0 0.5px, transparent 1px),
+    radial-gradient(circle at 61px 23px, rgba(255, 255, 255, 0.85) 0 0.4px, transparent 0.9px),
+    radial-gradient(circle at 19px 59px, rgba(255, 244, 214, 0.9) 0 0.5px, transparent 1px),
+    radial-gradient(circle at 43px 31px, rgba(255, 255, 255, 0.75) 0 0.4px, transparent 0.8px),
+    radial-gradient(circle at 83px 71px, rgba(255, 255, 255, 0.95) 0 0.6px, transparent 1.1px),
+    radial-gradient(circle at 5px 47px, rgba(220, 200, 255, 0.85) 0 0.45px, transparent 0.9px);
+  background-size: 61px 61px, 83px 83px, 47px 47px, 97px 97px, 71px 71px, 53px 53px, 113px 113px, 67px 67px;
+  -webkit-mask-image: linear-gradient(125deg, transparent 31%, #000 45%, #000 55%, transparent 69%);
+  mask-image: linear-gradient(125deg, transparent 31%, #000 45%, #000 55%, transparent 69%);
+  animation: twinkle 4.6s ease-in-out -1.5s infinite alternate;
+}
+@keyframes dustTwinkle { 0% { opacity: 0.55; } 100% { opacity: 1; } }
+.stars .dust { animation-name: dustTwinkle; }
+@media (prefers-reduced-motion: reduce) { .stars .dust { animation: none; } }
