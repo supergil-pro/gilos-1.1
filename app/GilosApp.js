@@ -9,6 +9,10 @@ const GUEST_CREDITS = 3;
 const MEMBER_CREDITS = 20;
 const LANG_KEY = "gilos-lang";
 const MAX_MEDIA = 6;
+// הלוגו על הגרסה: x,y הם מיקום הפינה העליונה-שמאלית כחלק מהרוחב/הגובה; size הוא הרוחב כחלק מרוחב הגרסה
+const LOGO_DEFAULT = { x: 0.04, y: 0.04, size: 0.2, opacity: 1, color: "orig" };
+const LOGO_COLORS = [["orig", "מקורי", "Original", null], ["white", "לבן", "White", "#ffffff"], ["black", "שחור", "Black", "#000000"], ["blue", "כחול", "Blue", "#1E9BFF"], ["red", "אדום", "Red", "#FF3355"], ["yellow", "צהוב", "Yellow", "#FFE600"], ["green", "ירוק", "Green", "#39FF14"]];
+let logoDrag = null; // מצב גרירת הלוגו (רק בזמן גרירה)
 // יחסי תמונה במצלמה: מלא (כל מה שהמצלמה רואה), סטורי/ריל, פוסט, ריבוע
 const RATIOS = [["full", null], ["9:16", 9 / 16], ["4:5", 4 / 5], ["1:1", 1]];
 let mediaSeq = 0; // מזהה רץ לקבצים שנבחרו (רק לזיהוי בתוך הדפדפן)
@@ -184,7 +188,7 @@ const INITIAL = {
   ],
   saved: [],
   connected: ["Instagram", "Facebook"],
-  intro: true, logo: false, fixed: [0, 2, 4], idea: 0,
+  intro: true, logo: false, logoAR: 1, logoCfg: LOGO_DEFAULT, fixed: [0, 2, 4], idea: 0,
   // פרופילים: כמה עסקים תחת אותו משתמש. הנתונים של הפרופיל הפעיל יושבים ישירות ב-state,
   // ושל האחרים נשמרים ב-profiles[].data עד שעוברים אליהם.
   profiles: [], pid: null, newProf: "", prev: "home", quizFrom: "auth",
@@ -194,7 +198,7 @@ const INITIAL = {
   camFacing: "environment", camMode: "photo", camZoom: 1, camHW: null, camTorchOK: false, camTorch: false, camRatio: "full", camGrid: false, camTimer: 0, countdown: 0, camDims: null, camError: "", camReady: false, recording: false, recSec: 0,
 };
 // השדות ששייכים לפרופיל (ולא לחשבון): הגדרות, שאלון, האשטגים, חשבונות מחוברים ולוח תוכן
-const PROFILE_KEYS = ["quiz", "other", "tags", "offTags", "prompt", "tpl", "subs", "watermark", "sound", "track", "soundText", "nets", "format", "queue", "saved", "connected", "intro", "logo", "fixed"];
+const PROFILE_KEYS = ["logoAR", "logoCfg", "quiz", "other", "tags", "offTags", "prompt", "tpl", "subs", "watermark", "sound", "track", "soundText", "nets", "format", "queue", "saved", "connected", "intro", "logo", "fixed"];
 const snapshot = (s) => Object.fromEntries(PROFILE_KEYS.map((k) => [k, s[k]]));
 const NEW_PROFILE = { ...snapshot(INITIAL), queue: [], connected: [] };
 const WORK_RESET = { versions: [], chosen: null, media: [], done: null, qi: 0 };
@@ -236,7 +240,7 @@ const FX_RULES = [
   [/חמים|חם יותר|warm/i, (f) => ({ ...f, warm: 1, cool: 0 }), ["צבעים חמים", "Warmer"]],
   [/צבעים קרים|קר יותר|cool/i, (f) => ({ ...f, cool: 1, warm: 0 }), ["צבעים קרים", "Cooler"]],
   [/בלי לוגו|ללא לוגו|הסר.{0,6}לוגו|no logo|remove.{0,6}logo/i, (f) => ({ ...f, logo: false }), ["בלי לוגו", "No logo"]],
-  [/עם לוגו|הוסף.{0,6}לוגו|add.{0,6}logo/i, (f) => ({ ...f, logo: true }), ["עם לוגו", "With logo"]],
+  [/עם לוגו|הוסף.{0,6}לוגו|with logo|add.{0,6}logo/i, (f) => ({ ...f, logo: true }), ["עם לוגו", "With logo"]],
   [/בלי כתוביות|ללא כתוביות|בלי כיתוב|ללא כיתוב|no captions?|no subtitles/i, (f) => ({ ...f, subs: false }), ["בלי כיתוב", "No captions"]],
   [/כיתוב גדול|כתוביות גדולות|גדול יותר.{0,8}כיתוב|bigger captions?|larger captions?/i, (f) => ({ ...f, subs: true, bigSubs: true }), ["כיתוב גדול", "Bigger captions"]],
 ];
@@ -331,6 +335,8 @@ const GlyphBadge = ({ name, from, to }) => (
   <span className="glyphbadge" style={{ background: `linear-gradient(135deg, ${from}, ${to})` }}><Glyph name={name} /></span>
 );
 
+// זוגות סותרים: בחירה באחד מבטלת את השני
+const OPPOSITE = { nologo: "logo", logo: "nologo", nosubs: "bigsubs", bigsubs: "nosubs", calm: "upbeat", upbeat: "calm" };
 // תיקונים מהירים: כל אחד נבחר פעם אחת (לחיצה נוספת מבטלת), כדי שלא יופיע כפול בהערה. [מזהה, צבע התחלה, צבע סוף, עברית, אנגלית]
 const QUICK_NOTES = [
   ["short", "#FF3D7F", "#FF8A3D", "קצר יותר", "Shorter"],
@@ -818,6 +824,75 @@ export default function GilosApp() {
   };
 
   // תצוגה מקדימה של גרסה ותיקונים לפי הערות
+  // לוגו מהמכשיר: מוקטן ל-256 פיקסלים לכל היותר ונשמר עם הפרופיל, ומשמש כסימן המים על הגרסאות
+  const logoImg = typeof S.logo === "string" ? S.logo : null;
+  const pickLogo = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return toast(t("הלוגו צריך להיות קובץ תמונה", "The logo must be an image file"));
+    if (file.size > 5 * 1024 * 1024) return toast(t("הקובץ גדול מדי (עד 5MB)", "The file is too large (max 5MB)"));
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, 256 / Math.max(img.naturalWidth || 256, img.naturalHeight || 256));
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round((img.naturalWidth || 256) * scale));
+      c.height = Math.max(1, Math.round((img.naturalHeight || 256) * scale));
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      set({ logo: c.toDataURL("image/png"), logoAR: +(c.width / c.height).toFixed(3), watermark: true });
+      toast(t("הלוגו נשמר ויופיע על הגרסאות", "Logo saved — it will appear on your versions"));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); toast(t("לא הצלחנו לקרוא את התמונה", "We couldn't read that image")); };
+    img.src = url;
+  };
+  // הלוגו על הגרסה: מיקום, גודל, שקיפות וצבע לפי בחירת המשתמש (ברירת מחדל: למעלה משמאל, בלי שקיפות)
+  const lc = { ...LOGO_DEFAULT, ...(S.logoCfg || {}) };
+  const logoColor = LOGO_COLORS.find((x) => x[0] === lc.color)?.[3] || null;
+  const wm = (editable = false) => {
+    const style = { left: `${lc.x * 100}%`, top: `${lc.y * 100}%`, width: `${lc.size * 100}%`, opacity: lc.opacity, aspectRatio: String(logoImg ? S.logoAR || 1 : 2.6) };
+    const inner = !logoImg
+      ? <svg viewBox="0 0 52 20" width="100%" height="100%" aria-hidden="true"><text x="26" y="15" textAnchor="middle" fontFamily="var(--font-orbitron), sans-serif" fontWeight="900" fontSize="13" fill={logoColor || "#fff"}>LOGO</text></svg>
+      : logoColor
+        ? <span className="wmmask" style={{ background: logoColor, WebkitMaskImage: `url(${logoImg})`, maskImage: `url(${logoImg})` }} />
+        : <img src={logoImg} alt="" />; // eslint-disable-line @next/next/no-img-element
+    if (!editable) return <span className="wmbox" style={style}>{inner}</span>;
+    return (
+      <span className="wmbox drag" style={style} onPointerDown={logoDragStart} onPointerMove={logoDragMove} onPointerUp={logoDragEnd} onPointerCancel={logoDragEnd}
+        role="slider" aria-valuenow={Math.round(lc.x * 100)} aria-valuemin={0} aria-valuemax={100} aria-label={t("מיקום הלוגו — גררו כדי להזיז", "Logo position — drag to move")} aria-valuetext={`${Math.round(lc.x * 100)}%, ${Math.round(lc.y * 100)}%`}>
+        {inner}
+      </span>
+    );
+  };
+  const setLogo = (patch) => set((s) => {
+    const cur = { ...LOGO_DEFAULT, ...(s.logoCfg || {}), ...patch };
+    return { logoCfg: { ...cur, x: Math.min(cur.x, Math.max(0, 1 - cur.size)) } };
+  });
+  // גרירת הלוגו על הנגן, בעכבר או באצבע
+  const logoDragStart = (e) => {
+    const box = e.currentTarget, area = box.parentElement.getBoundingClientRect(), r = box.getBoundingClientRect();
+    box.setPointerCapture?.(e.pointerId);
+    logoDrag = { dx: e.clientX - r.left, dy: e.clientY - r.top, area, w: r.width, h: r.height };
+    e.preventDefault();
+  };
+  const logoDragMove = (e) => {
+    if (!logoDrag) return;
+    const { dx, dy, area, w, h } = logoDrag;
+    const x = Math.min(Math.max(0, e.clientX - dx - area.left), Math.max(0, area.width - w)) / area.width;
+    const y = Math.min(Math.max(0, e.clientY - dy - area.top), Math.max(0, area.height - h)) / area.height;
+    setLogo({ x: +x.toFixed(3), y: +y.toFixed(3) });
+  };
+  const logoDragEnd = () => { logoDrag = null; };
+  // מיקומים מהירים: פינות ומרכז, מחושבים לפי גודל הנגן
+  const placeLogo = (pos) => {
+    const p = document.querySelector(".vplayer")?.getBoundingClientRect();
+    const hf = p ? (lc.size * p.width) / (logoImg ? S.logoAR || 1 : 2.6) / p.height : lc.size;
+    const m = 0.04, right = 1 - lc.size - m, bottom = Math.max(m, 1 - hf - m);
+    const at = { tl: { x: m, y: m }, tr: { x: right, y: m }, c: { x: (1 - lc.size) / 2, y: (1 - hf) / 2 }, bl: { x: m, y: bottom }, br: { x: right, y: bottom } }[pos];
+    setLogo(at);
+  };
+
   // חיבור חשבונות. TODO(שלב 5): להחליף בהתחברות אמיתית — אינסטגרם ופייסבוק יחד דרך התחברות אחת של מטא
   const connectMany = (groups) => {
     const queue = groups.filter((g) => !g.nets.every((n) => S.connected.includes(n)));
@@ -1129,7 +1204,7 @@ export default function GilosApp() {
               </div>
             )}
             <div className="card row"><div><h3>{t("כתוביות אוטומטיות", "Auto captions")}</h3><span className="muted small">{t("כיתוב מונפש לפי מה שנאמר בסרטון", "Animated captions from what's said in the video")}</span></div><Switch on={S.subs} onClick={() => set({ subs: !S.subs })} label={t("כתוביות אוטומטיות", "Auto captions")} /></div>
-            <div className="card row"><div><h3>{t("לוגו / סימן מים", "Logo / watermark")}</h3><span className="muted small">{t("מתוך ערכת המותג שלך", "From your brand kit")}</span></div><Switch on={S.watermark} onClick={() => set({ watermark: !S.watermark })} label={t("לוגו או סימן מים", "Logo or watermark")} /></div>
+            <div className="card row"><div><h3>{t("לוגו / סימן מים", "Logo / watermark")}</h3><span className="muted small">{logoImg ? t("הלוגו שהעלית בהגדרות", "The logo you uploaded in Settings") : t("עוד לא הועלה לוגו — אפשר להעלות בהגדרות", "No logo yet — upload one in Settings")}</span></div><Switch on={S.watermark} onClick={() => set({ watermark: !S.watermark })} label={t("לוגו או סימן מים", "Logo or watermark")} /></div>
             <div className="card stack">
               <div className="row"><h3>{t("סאונד", "Sound")}</h3><span className="muted ltr" style={{ fontSize: 11.5 }}>Soundza</span></div>
               <Seg value={S.sound} onChange={(sound) => set({ sound })} options={[["none", t("ללא", "None")], ["lib", t("ספרייה", "Library")], ["text", t("מטקסט", "From text")]]} />
@@ -1244,7 +1319,7 @@ export default function GilosApp() {
               <Thumb g={v.g} style={{ height: 148 }}>
                 <Cover img={v.img} vid={v.vid} g={v.g} fx={v.fx} />
                 {verKind(v) === "video" && <span className="play">▶</span>}
-                {(v.fx?.subs ?? S.subs) && <span className="subs" />}{(v.fx?.logo ?? S.watermark) && <span className="wm">LOGO</span>}
+                {(v.fx?.subs ?? S.subs) && <span className="subs" />}{(v.fx?.logo ?? S.watermark) && wm()}
                 <KindBadge kind={verKind(v)} dur={v.dur} label={verKind(v) === "image" ? t("תמונה", "Photo") : t("סרטון", "Video")} />
                 <button className="thumbhit" aria-label={t(`תצוגה מקדימה ותיקונים לגרסה ${i + 1}`, `Preview and edit version ${i + 1}`)} onClick={() => openPreview(v)} />
               </Thumb>
@@ -1288,10 +1363,39 @@ export default function GilosApp() {
                 : <div className="vplaceholder">{tr(v.name)}</div>}
               {fxTint(v.fx) && <span className="tint" style={{ background: v.g }} />}
               {(v.fx?.subs ?? S.subs) && <span className={cx("vsubs", v.fx?.bigSubs && "big")} dir="auto">{(S.caption || caps[S.cap].text).slice(0, 42)}</span>}
-              {(v.fx?.logo ?? S.watermark) && <span className="wm">LOGO</span>}
+              {(v.fx?.logo ?? S.watermark) && wm(true)}
               <KindBadge kind={verKind(v)} dur={v.vid ? null : v.dur} label={verKind(v) === "image" ? t("תמונה", "Photo") : t("סרטון", "Video")} />
               {v.rev > 1 && <span className="revbadge">{t(`תיקון ${v.rev - 1}`, `Edit ${v.rev - 1}`)}</span>}
               {S.applying && <div className="vapplying"><span className="ring" style={{ width: 54, height: 54 }} /><span>{t("מעדכנים את הגרסה…", "Updating this version…")}</span></div>}
+            </div>
+            <div className="card stack logocard">
+              <div className="row">
+                <h3>{t("לוגו", "Logo")}</h3>
+                {logoImg ? <span className="muted small">{t("גררו את הלוגו על הגרסה כדי להזיז", "Drag the logo on the version to move it")}</span>
+                  : <label className="chip small" style={{ minHeight: 32, cursor: "pointer", color: "#fff" }}>
+                      <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden onChange={pickLogo} />
+                      {t("＋ העלאת לוגו", "＋ Upload logo")}
+                    </label>}
+              </div>
+              {!(v.fx?.logo ?? S.watermark) && <span className="muted small">{t("הלוגו מוסתר בגרסה הזו. אפשר להחזיר עם ״עם לוגו״ בתיקונים המהירים.", "The logo is hidden in this version. Bring it back with “With logo” in the quick fixes.")}</span>}
+              <div className="logopos" role="group" aria-label={t("מיקום מהיר", "Quick position")}>
+                {[["tl", t("למעלה משמאל", "Top left")], ["tr", t("למעלה מימין", "Top right")], ["c", t("מרכז", "Center")], ["bl", t("למטה משמאל", "Bottom left")], ["br", t("למטה מימין", "Bottom right")]].map(([k, l]) => (
+                  <button key={k} className={cx("posbtn", k)} onClick={() => placeLogo(k)} aria-label={l} title={l}><i /></button>
+                ))}
+                <button className="chip small" style={{ minHeight: 30, marginInlineStart: "auto" }} onClick={() => set({ logoCfg: LOGO_DEFAULT })}>{t("איפוס", "Reset")}</button>
+              </div>
+              <label className="rangerow"><span>{t("גודל", "Size")}</span>
+                <input type="range" min="0.06" max="0.5" step="0.01" value={lc.size} onChange={(e) => setLogo({ size: +e.target.value })} dir="ltr" />
+                <b className="ltr">{Math.round(lc.size * 100)}%</b></label>
+              <label className="rangerow"><span>{t("שקיפות", "Opacity")}</span>
+                <input type="range" min="0.1" max="1" step="0.05" value={lc.opacity} onChange={(e) => setLogo({ opacity: +e.target.value })} dir="ltr" />
+                <b className="ltr">{Math.round(lc.opacity * 100)}%</b></label>
+              <div className="row start" style={{ gap: 8, flexWrap: "wrap" }} role="group" aria-label={t("צבע הלוגו", "Logo color")}>
+                <span className="small" style={{ minWidth: 44 }}>{t("צבע", "Color")}</span>
+                {LOGO_COLORS.map(([k, he, en, c]) => (
+                  <button key={k} className={cx("swatch", lc.color === k && "on", !c && "orig")} style={c ? { background: c } : undefined} onClick={() => setLogo({ color: k })} aria-pressed={lc.color === k} aria-label={t(he, en)} title={t(he, en)} />
+                ))}
+              </div>
             </div>
             <div className="card stack">
               <div className="row"><h3>{t("אפקטים", "Effects")}</h3>{v.fx?.lookName && <span className="small" style={{ color: "var(--yellow)" }}>{t(v.fx.lookName[0], v.fx.lookName[1])}</span>}</div>
@@ -1323,8 +1427,15 @@ export default function GilosApp() {
               <HScroll label={t("תיקונים מהירים", "Quick fixes")} prev={t("הקודם", "Previous")} next={t("הבא", "Next")}>
                 {QUICK_NOTES.map(([k, from, to, he, eng]) => {
                   const on = S.picks.includes(k);
+                  if (k === "logo" && !logoImg) return (
+                    <label key={k} className={cx("tile", on && "on")} style={{ cursor: "pointer" }}>
+                      <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden disabled={S.applying}
+                        onChange={(e) => { pickLogo(e); set((s) => ({ picks: [...s.picks.filter((p) => p !== "nologo" && p !== "logo"), "logo"] })); }} />
+                      <GlyphBadge name={k} from={from} to={to} /><span className="tilelabel">{t("הוספת לוגו", "Add logo")}</span>
+                    </label>
+                  );
                   return (
-                    <button key={k} className={cx("tile", on && "on")} aria-pressed={on} disabled={S.applying} onClick={() => set((s) => ({ picks: toggle(s.picks, k) }))}>
+                    <button key={k} className={cx("tile", on && "on")} aria-pressed={on} disabled={S.applying} onClick={() => set((s) => ({ picks: toggle(s.picks.filter((p) => p !== OPPOSITE[k]), k) }))}>
                       <GlyphBadge name={k} from={from} to={to} /><span className="tilelabel">{t(he, eng)}</span>
                     </button>
                   );
@@ -1475,7 +1586,17 @@ export default function GilosApp() {
           })}
           <h3 style={{ marginTop: 6 }}>{t("ערכת מותג", "Brand kit")}</h3>
           <div className="card stack" style={{ gap: 12 }}>
-            <div className="row"><span style={{ fontSize: 14 }}>{t("לוגו", "Logo")}</span><button className={cx("chip small", S.logo && "on")} style={{ minHeight: 34 }} onClick={() => set({ logo: !S.logo })}>{S.logo ? "✓ logo.png" : t("＋ העלאת לוגו", "＋ Upload logo")}</button></div>
+            <div className="row">
+              <span style={{ fontSize: 14 }}>{t("לוגו", "Logo")}</span>
+              <span className="row" style={{ gap: 8 }}>
+                {logoImg && <span className="logoprev"><img src={logoImg} alt={t("הלוגו שלך", "Your logo")} /></span> /* eslint-disable-line @next/next/no-img-element */}
+                <label className={cx("chip small", logoImg && "on")} style={{ minHeight: 34, cursor: "pointer" }}>
+                  <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={pickLogo} hidden />
+                  {logoImg ? t("החלפה", "Replace") : t("＋ העלאת לוגו", "＋ Upload logo")}
+                </label>
+                {logoImg && <button className="chip small" style={{ minHeight: 34 }} onClick={() => set({ logo: false })} aria-label={t("הסרת הלוגו", "Remove logo")}>×</button>}
+              </span>
+            </div>
             <div className="row"><span style={{ fontSize: 14 }}>{t("צבעי המותג", "Brand colors")}</span><span className="row" style={{ gap: 6 }}>{["var(--blue)", "var(--red)", "var(--yellow)"].map((c) => (<i key={c} className="dot big" style={{ "--c": c }} />))}</span></div>
             <div className="row"><span style={{ fontSize: 14 }}>{t("פתיח וסיום קבועים לסרטונים", "Fixed intro and outro for videos")}</span><Switch on={S.intro} onClick={() => set({ intro: !S.intro })} label={t("פתיח וסיום", "Intro and outro")} /></div>
           </div>
@@ -1556,9 +1677,14 @@ export default function GilosApp() {
     ),
   };
 
-  const isTab = TABS.some(([k]) => k === S.screen);
+  // סרגל הניווט התחתון מוצג תמיד אחרי הכניסה, חוץ ממסך הפתיחה, ההרשמה והמצלמה (מסך מלא)
+  const showNav = !["open", "auth", "camera"].includes(S.screen);
+  // הלשונית המודגשת: המסך עצמו, או הלשונית שהוא שייך אליה
+  const navTab = TABS.some(([k]) => k === S.screen) ? S.screen
+    : ["upload", "process", "versions", "vpreview", "publish", "done"].includes(S.screen) ? "home"
+    : ["profiles", "about"].includes(S.screen) ? "settings" : null;
   return (
-    <main className="app" dir={en ? "ltr" : "rtl"} lang={lang}>
+    <main className={cx("app", showNav && "withnav")} dir={en ? "ltr" : "rtl"} lang={lang}>
       <div className={cx("stars", S.screen === "open" && "strong")} aria-hidden="true"><span className="haze" /><span className="dust" /><i /></div>
       <div className="topbar">
         {activeProfile && S.screen !== "open" && S.screen !== "auth" ? (
@@ -1572,10 +1698,10 @@ export default function GilosApp() {
         </div>
       </div>
       <div key={S.screen} style={{ display: "contents" }}>{screens[S.screen]()}</div>
-      {isTab && (
+      {showNav && (
         <nav>
           {TABS.map(([k, label, icon]) => (
-            <button key={k} className={cx(S.screen === k && "on")} onClick={() => go(k)}>
+            <button key={k} className={cx(navTab === k && "on")} aria-current={navTab === k ? "page" : undefined} onClick={() => go(k)}>
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{icon}</svg>
               {tr(label)}
             </button>
