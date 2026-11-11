@@ -9,6 +9,7 @@ const GUEST_CREDITS = 3;
 const MEMBER_CREDITS = 20;
 const LANG_KEY = "gilos-lang";
 const MAX_MEDIA = 6;
+let mediaSeq = 0; // מזהה רץ לקבצים שנבחרו (רק לזיהוי בתוך הדפדפן)
 
 const NETS = [
   { n: "Instagram", c: "#FF3355", v: 100 },
@@ -185,6 +186,8 @@ const INITIAL = {
   // ושל האחרים נשמרים ב-profiles[].data עד שעוברים אליהם.
   profiles: [], pid: null, newProf: "", prev: "home", quizFrom: "auth",
   uid: null, busy: false, authNote: "", confirmDelete: false,
+  mediaSel: null, camTry: 0, pv: null, note: "", applying: false,
+  camFacing: "environment", camMode: "photo", camError: "", camReady: false, recording: false, recSec: 0,
 };
 // השדות ששייכים לפרופיל (ולא לחשבון): הגדרות, שאלון, האשטגים, חשבונות מחוברים ולוח תוכן
 const PROFILE_KEYS = ["quiz", "other", "tags", "offTags", "prompt", "tpl", "subs", "watermark", "sound", "track", "soundText", "nets", "format", "queue", "saved", "connected", "intro", "logo", "fixed"];
@@ -194,7 +197,7 @@ const WORK_RESET = { versions: [], chosen: null, media: [], done: null, qi: 0 };
 // מה שנשמר במסד הנתונים: בלי כתובות מקומיות של תמונות, שלא שורדות רענון
 const cleanSnap = (s) => {
   const d = snapshot(s);
-  return { ...d, saved: d.saved.map(({ img, ...v }) => v) };
+  return { ...d, saved: d.saved.map(({ img, vid, ...v }) => v) };
 };
 const ACTIVE_KEY = "gilos-active-profile";
 const readActive = () => { try { return localStorage.getItem(ACTIVE_KEY); } catch { return null; } };
@@ -212,9 +215,17 @@ function makeVersions() {
     id: base + i, name: st[i], g: g[i],
     dur: "0:" + (12 + Math.floor(Math.random() * 18)),
     score: 62 + Math.floor(Math.random() * 35),
-    tip: tips[i], saved: false,
+    tip: tips[i], saved: false, rev: 1, notes: [],
   }));
 }
+// תיקון לגרסה לפי הערות המשתמש. TODO(שלב 6): לשלוח את ההערה למנוע ה-AI ולקבל סרטון ערוך מחדש
+function reviseVersion(v, note) {
+  return { ...v, rev: (v.rev || 1) + 1, notes: [...(v.notes || []), note], score: Math.min(99, v.score + 2 + Math.floor(Math.random() * 6)) };
+}
+const QUICK_NOTES = [
+  ["קצר יותר", "Shorter"], ["כיתוב גדול יותר", "Bigger captions"], ["מוזיקה רגועה יותר", "Calmer music"],
+  ["פתיחה חזקה יותר", "Stronger opening"], ["בלי לוגו", "No logo"], ["צבעים חמים יותר", "Warmer colors"],
+];
 
 /* ---------- רכיבים קטנים ---------- */
 const Back = ({ onClick, label }) => (
@@ -244,11 +255,11 @@ const MediaView = ({ m }) => {
   // eslint-disable-next-line @next/next/no-img-element
   return <img className="fill" src={m.url} alt={m.name} />;
 };
-// תמונת הרקע של גרסה: התמונה שהועלתה, עם גוון הסגנון מעליה
-const Cover = ({ img, g }) => (img ? (
+// תמונת הרקע של גרסה: התמונה או הסרטון שהועלו, עם גוון הסגנון מעליהם
+const Cover = ({ img, vid, g }) => (img || vid ? (
   <>
     {/* eslint-disable-next-line @next/next/no-img-element */}
-    <img className="fill" src={img} alt="" />
+    {img ? <img className="fill" src={img} alt="" /> : <video className="fill" src={`${vid}#t=0.1`} muted playsInline preload="metadata" />}
     <span className="tint" style={{ background: g }} />
   </>
 ) : null);
@@ -488,9 +499,120 @@ export default function GilosApp() {
       }
       set({ credits: data + 1 }); // השורה הבאה מורידה אחת, כמו במצב המקומי
     }
-    const img = S.media.find((m) => m.kind === "image")?.url;
-    const versions = makeVersions().map((v) => ({ ...v, img }));
+    const first = S.media.find((m) => m.kind !== "link");
+    const img = first?.kind === "image" ? first.url : null, vid = first?.kind === "video" ? first.url : null;
+    const versions = makeVersions().map((v) => ({ ...v, img, vid }));
     set((s) => ({ credits: s.credits - 1, versions, pstep: 0, linkOpen: false, screen: "process" }));
+  };
+
+  /* ---------- מדיה: קבצים מהמכשיר ומצלמה ---------- */
+  // הקבצים מוצגים מקומית בלבד. TODO(שלב 6): להעלות אותם לאחסון ולשלוח למנוע ה-AI
+  const room = MAX_MEDIA - S.media.length;
+  // המדיה שמוצגת בתצוגה המקדימה: מה שנבחר בלחיצה, או האחרונה שנוספה
+  const sel = S.media.find((m) => m.id === S.mediaSel) || S.media[S.media.length - 1];
+  const selIdx = sel ? S.media.indexOf(sel) : -1;
+  const tooMany = () => toast(t(`עד ${MAX_MEDIA} קבצים בכל יצירה`, `Up to ${MAX_MEDIA} files per creation`));
+  const addFiles = (e) => {
+    const picked = [...e.target.files];
+    e.target.value = "";
+    const files = picked.filter((f) => /^(image|video)\//.test(f.type));
+    if (picked.length && !files.length) return toast(t("אפשר להעלות רק תמונות וסרטונים", "Only photos and videos can be uploaded"));
+    if (files.length > room) tooMany();
+    const items = files.slice(0, Math.max(room, 0)).map((f) => ({
+      id: `file-${++mediaSeq}`,
+      kind: f.type.startsWith("video") ? "video" : "image",
+      url: URL.createObjectURL(f), name: f.name,
+    }));
+    if (items.length) set((s) => ({ media: [...s.media, ...items], screen: s.screen === "camera" ? "upload" : s.screen }));
+  };
+
+  // מצלמה בתוך האפליקציה: עובדת גם במחשב (מצלמת רשת) וגם בטלפון, בלי לצאת מהאפליקציה
+  const videoRef = useRef(null), streamRef = useRef(null), recRef = useRef(null), chunksRef = useRef([]), keepRef = useRef(true);
+  const openCamera = () => (room < 1 ? tooMany() : set({ screen: "camera", camError: "", camReady: false }));
+  const addCaptured = (blob, kind) => {
+    const item = { id: `cam-${++mediaSeq}`, kind, url: URL.createObjectURL(blob), name: kind === "image" ? "photo.jpg" : "video" };
+    set((s) => ({ media: [...s.media, item].slice(0, MAX_MEDIA), screen: "upload", recording: false }));
+    toast(kind === "image" ? t("התמונה נוספה", "Photo added") : t("הסרטון נוסף", "Video added"));
+  };
+  const stopRec = (keep = true) => {
+    keepRef.current = keep;
+    if (recRef.current?.state === "recording") recRef.current.stop();
+    recRef.current = null;
+  };
+  useEffect(() => {
+    if (S.screen !== "camera") return;
+    let cancelled = false;
+    const md = navigator.mediaDevices;
+    const fail = (camError) => !cancelled && set({ camError, camReady: false });
+    if (!md?.getUserMedia) { Promise.resolve().then(() => fail("unsupported")); return () => { cancelled = true; }; }
+    md.getUserMedia({ video: { facingMode: S.camFacing, width: { ideal: 1080 }, height: { ideal: 1920 } }, audio: S.camMode === "video" })
+      .then((stream) => {
+        if (cancelled) return stream.getTracks().forEach((tr) => tr.stop());
+        streamRef.current = stream;
+        if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play().catch(() => {}); }
+        set({ camError: "", camReady: true });
+      })
+      .catch((err) => fail(err?.name === "NotAllowedError" || err?.name === "SecurityError" ? "denied" : err?.name === "NotFoundError" || err?.name === "OverconstrainedError" ? "nocam" : "failed"));
+    return () => {
+      cancelled = true;
+      stopRec(false);
+      streamRef.current?.getTracks().forEach((tr) => tr.stop());
+      streamRef.current = null;
+    };
+  }, [S.screen, S.camFacing, S.camMode, S.camTry]);
+
+  // מונה זמן הקלטה; עוצר אוטומטית אחרי דקה
+  useEffect(() => {
+    if (!S.recording) return;
+    const id = setInterval(() => {
+      setS((s) => ({ ...s, recSec: s.recSec + 1 }));
+      if (recRef.current && Date.now() - recRef.current.startedAt >= 60000) stopRec(true);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [S.recording]);
+
+  const takePhoto = () => {
+    const v = videoRef.current;
+    if (!v?.videoWidth) return;
+    const c = document.createElement("canvas");
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext("2d").drawImage(v, 0, 0);
+    c.toBlob((b) => b && addCaptured(b, "image"), "image/jpeg", 0.92);
+  };
+  const startRec = () => {
+    const stream = streamRef.current;
+    if (!stream || typeof MediaRecorder === "undefined") return toast(t("הדפדפן הזה לא תומך בהקלטת וידאו", "This browser can't record video"));
+    const type = ["video/mp4", "video/webm;codecs=vp9,opus", "video/webm"].find((m) => MediaRecorder.isTypeSupported?.(m)) || "";
+    const rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+    chunksRef.current = [];
+    keepRef.current = true;
+    rec.ondataavailable = (e) => e.data.size && chunksRef.current.push(e.data);
+    rec.onstop = () => {
+      const blob = new Blob(chunksRef.current, { type: rec.mimeType || "video/webm" });
+      if (keepRef.current && blob.size) addCaptured(blob, "video");
+      else set({ recording: false });
+    };
+    rec.start();
+    rec.startedAt = Date.now();
+    recRef.current = rec;
+    set({ recording: true, recSec: 0 });
+  };
+  const leaveCamera = () => { stopRec(false); go("upload"); };
+  const shutter = () => (S.camMode === "photo" ? takePhoto() : S.recording ? stopRec(true) : startRec());
+
+  // תצוגה מקדימה של גרסה ותיקונים לפי הערות
+  const findVersion = (id) => S.versions.find((x) => x.id === id) || S.saved.find((x) => x.id === id);
+  const openPreview = (v) => set({ pv: v.id, note: "", applying: false, screen: "vpreview" });
+  const applyNote = (v) => {
+    const note = S.note.trim();
+    if (!note || S.applying) return;
+    set({ applying: true });
+    setTimeout(() => {
+      const nv = reviseVersion(v, note);
+      const swap = (list) => list.map((x) => (x.id === v.id ? nv : x));
+      set((s) => ({ versions: swap(s.versions), saved: swap(s.saved), chosen: s.chosen?.id === v.id ? nv : s.chosen, note: "", applying: false }));
+      toast(t("הגרסה עודכנה — מנגנים אותה מחדש", "Version updated — playing it again"));
+    }, 1600);
   };
 
   const toPublish = (v) => set({ chosen: v, caption: caps[S.cap].text, screen: "publish" });
@@ -664,23 +786,6 @@ export default function GilosApp() {
 
     /* 5. העלאה */
     upload: () => {
-      // הקבצים נבחרים מהמכשיר ומוצגים מקומית בלבד.
-      // TODO(שלב 6): להעלות אותם לאחסון ולשלוח למנוע ה-AI
-      const room = MAX_MEDIA - S.media.length;
-      const tooMany = () => toast(t(`עד ${MAX_MEDIA} קבצים בכל יצירה`, `Up to ${MAX_MEDIA} files per creation`));
-      const addFiles = (e) => {
-        const picked = [...e.target.files];
-        e.target.value = "";
-        const files = picked.filter((f) => /^(image|video)\//.test(f.type));
-        if (picked.length && !files.length) return toast(t("אפשר להעלות רק תמונות וסרטונים", "Only photos and videos can be uploaded"));
-        if (files.length > room) tooMany();
-        const items = files.slice(0, Math.max(room, 0)).map((f, i) => ({
-          id: `${f.name}-${f.size}-${f.lastModified}-${S.media.length + i}`,
-          kind: f.type.startsWith("video") ? "video" : "image",
-          url: URL.createObjectURL(f), name: f.name,
-        }));
-        if (items.length) set((s) => ({ media: [...s.media, ...items] }));
-      };
       const addLink = (e) => {
         e?.preventDefault();
         const url = S.linkUrl.trim();
@@ -701,11 +806,12 @@ export default function GilosApp() {
                   {tr(s)}
                 </>
               );
-              // קישור פותח שדה להדבקה; שאר המקורות פותחים את בורר הקבצים של המכשיר
+              // קישור פותח שדה להדבקה, מצלמה פותחת את מסך המצלמה, וגלריה את בורר הקבצים של המכשיר
               if (s === "קישור") return <button key={s} className={cx("src", S.linkOpen && "on")} style={{ "--c": c }} onClick={() => set({ linkOpen: !S.linkOpen })}>{inner}</button>;
+              if (s === "מצלמה") return <button key={s} className="src" style={{ "--c": c }} onClick={openCamera}>{inner}</button>;
               return (
                 <label key={s} className="src" style={{ "--c": c }}>
-                  <input type="file" accept="image/*,video/*" multiple={s === "גלריה"} capture={s === "מצלמה" ? "environment" : undefined} onChange={addFiles} aria-label={tr(s)} />
+                  <input type="file" accept="image/*,video/*" multiple onChange={addFiles} aria-label={tr(s)} />
                   {inner}
                 </label>
               );
@@ -719,13 +825,27 @@ export default function GilosApp() {
           )}
           <div className="tray">
             {S.media.length ? S.media.map((m) => (
-              <Thumb key={m.id} g={GRADS[0]}>
+              <Thumb key={m.id} g={GRADS[0]} style={sel?.id === m.id ? { boxShadow: "0 0 0 2px var(--blue), 0 0 12px var(--blue)" } : undefined}>
                 <MediaView m={m} />
+                <button className="thumbhit" aria-label={t(`תצוגה מקדימה: ${m.name}`, `Preview: ${m.name}`)} aria-pressed={sel?.id === m.id} onClick={() => set({ mediaSel: m.id })} />
                 <button className="x" aria-label={t(`הסרת ${m.name}`, `Remove ${m.name}`)} onClick={() => set((s) => ({ media: s.media.filter((x) => x.id !== m.id) }))}>×</button>
               </Thumb>
             )) : <span className="muted" style={{ fontSize: 13 }}>{t("עוד לא נבחרה מדיה — בחרו מקור למעלה", "No media yet — pick a source above")}</span>}
           </div>
           <div className="scroll">
+            {sel && (
+              <div className="card stack bigprev">
+                <div className="row">
+                  <h3>{t("תצוגה מקדימה", "Preview")}</h3>
+                  <span className="muted small">{t(`${selIdx + 1} מתוך ${S.media.length}`, `${selIdx + 1} of ${S.media.length}`)}</span>
+                </div>
+                <div className="prevframe">
+                  {sel.kind === "video" ? <video key={sel.id} src={sel.url} controls playsInline preload="metadata" />
+                    : sel.kind === "image" ? <img key={sel.id} src={sel.url} alt={sel.name} /> // eslint-disable-line @next/next/no-img-element
+                    : <div className="prevlink"><span>🔗</span><span className="ltr">{sel.id}</span><span className="muted small">{t("ניצור סרטון קצר מהקישור הזה", "We'll create a short video from this link")}</span></div>}
+                </div>
+              </div>
+            )}
             <div className="card row"><div><h3>{t("כתוביות אוטומטיות", "Auto captions")}</h3><span className="muted small">{t("כיתוב מונפש לפי מה שנאמר בסרטון", "Animated captions from what's said in the video")}</span></div><Switch on={S.subs} onClick={() => set({ subs: !S.subs })} label={t("כתוביות אוטומטיות", "Auto captions")} /></div>
             <div className="card row"><div><h3>{t("לוגו / סימן מים", "Logo / watermark")}</h3><span className="muted small">{t("מתוך ערכת המותג שלך", "From your brand kit")}</span></div><Switch on={S.watermark} onClick={() => set({ watermark: !S.watermark })} label={t("לוגו או סימן מים", "Logo or watermark")} /></div>
             <div className="card stack">
@@ -738,6 +858,49 @@ export default function GilosApp() {
           <button className="btn btn-primary" disabled={!S.media.length} onClick={startProcess}>
             {S.media.length ? t(`עבדו עם AI · ${S.media.length} קבצים · יצירה אחת`, `Process with AI · ${S.media.length} files · 1 creation`) : t("בחרו מדיה כדי להמשיך", "Pick media to continue")}
           </button>
+        </section>
+      );
+    },
+
+    /* 5א. מצלמה */
+    camera: () => {
+      const errText = {
+        denied: t("אין הרשאה למצלמה. אפשרו גישה למצלמה בהגדרות הדפדפן (סמל המנעול ליד הכתובת), ואז נסו שוב.", "No camera permission. Allow camera access in your browser settings (the lock icon by the address), then try again."),
+        nocam: t("לא נמצאה מצלמה במכשיר הזה.", "No camera was found on this device."),
+        unsupported: t("הדפדפן הזה לא תומך במצלמה בתוך האפליקציה.", "This browser doesn't support the in-app camera."),
+        failed: t("לא הצלחנו לפתוח את המצלמה. ייתכן שאפליקציה אחרת משתמשת בה.", "We couldn't open the camera. Another app may be using it."),
+      }[S.camError];
+      const mmss = `${Math.floor(S.recSec / 60)}:${String(S.recSec % 60).padStart(2, "0")}`;
+      return (
+        <section className="screen camscreen">
+          <video ref={videoRef} className={cx("campreview", S.camFacing === "user" && "mirror", !S.camReady && "dim")} autoPlay muted playsInline />
+          <div className="top camtop">
+            <Back onClick={leaveCamera} label={t("חזרה", "Back")} />
+            {S.recording ? <span className="recbadge ltr">● {mmss}</span> : <h3>{t("מצלמה", "Camera")}</h3>}
+            <span className="spacer" />
+          </div>
+          {S.camError ? (
+            <div className="card stack camerr" role="alert">
+              <span>{errText}</span>
+              <button className="btn btn-sm btn-primary" onClick={() => set((s) => ({ camError: "", camReady: false, camTry: s.camTry + 1 }))}>{t("נסו שוב", "Try again")}</button>
+              {/* חלופה: מצלמת המכשיר עצמה, דרך בורר הקבצים */}
+              <label className="btn btn-sm btn-soft">
+                <input type="file" accept={S.camMode === "video" ? "video/*" : "image/*"} capture="environment" onChange={addFiles} hidden />
+                {t("פתיחת מצלמת המכשיר", "Open the device camera")}
+              </label>
+            </div>
+          ) : !S.camReady && <div className="camwait muted">{t("פותחים את המצלמה…", "Opening the camera…")}</div>}
+          <div className="camcontrols">
+            {!S.recording && <Seg value={S.camMode} onChange={(camMode) => set({ camMode, camReady: false })} options={[["photo", t("תמונה", "Photo")], ["video", t("וידאו", "Video")]]} />}
+            <div className="camrow">
+              <span className="camside small">{S.media.length}/{MAX_MEDIA}</span>
+              <button className={cx("shutter", S.camMode === "video" && "vid", S.recording && "rec")} disabled={!S.camReady} onClick={shutter}
+                aria-label={S.camMode === "photo" ? t("צילום תמונה", "Take photo") : S.recording ? t("עצירת הקלטה", "Stop recording") : t("התחלת הקלטה", "Start recording")} />
+              <button className="camside flip" disabled={S.recording} onClick={() => set({ camFacing: S.camFacing === "user" ? "environment" : "user", camReady: false })} aria-label={t("החלפת מצלמה", "Switch camera")}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" /><path d="M9.5 12.5a2.8 2.8 0 0 1 5-1.5M14.5 14a2.8 2.8 0 0 1-5 1.2" /><path d="M14.6 9.6v1.6h-1.6M9.4 16.6V15h1.6" /></svg>
+              </button>
+            </div>
+          </div>
         </section>
       );
     },
@@ -760,13 +923,14 @@ export default function GilosApp() {
           {S.versions.length ? S.versions.map((v, i) => (
             <div key={v.id} className={cx("card ver", v.saved && "saved", S.gone === v.id && "gone")} style={{ animationDelay: i * 90 + "ms" }}>
               <Thumb g={v.g} style={{ height: 148 }}>
-                <Cover img={v.img} g={v.g} />
+                <Cover img={v.img} vid={v.vid} g={v.g} />
                 <span className="play">▶</span><span className="dur">{v.dur}</span>
                 {S.subs && <span className="subs" />}{S.watermark && <span className="wm">LOGO</span>}
+                <button className="thumbhit" aria-label={t(`תצוגה מקדימה ותיקונים לגרסה ${i + 1}`, `Preview and edit version ${i + 1}`)} onClick={() => openPreview(v)} />
               </Thumb>
               <div className="ver-body">
                 <div className="row">
-                  <div><div className="muted" style={{ fontSize: 11.5 }}>{t(`גרסה ${i + 1}`, `Version ${i + 1}`)}{v.saved ? t(" · נשמרה", " · saved") : ""}</div><h3 style={{ fontSize: 15.5 }}>{tr(v.name)}</h3></div>
+                  <div><div className="muted" style={{ fontSize: 11.5 }}>{t(`גרסה ${i + 1}`, `Version ${i + 1}`)}{v.rev > 1 ? t(` · תיקון ${v.rev - 1}`, ` · edit ${v.rev - 1}`) : ""}{v.saved ? t(" · נשמרה", " · saved") : ""}</div><h3 style={{ fontSize: 15.5 }}>{tr(v.name)}</h3></div>
                   <button className="scorebox" aria-label={t(`ציון פוטנציאל ${v.score} מתוך 99. הסבר`, `Potential score ${v.score} out of 99. Explain`)} onClick={() => toast(t("ציון פוטנציאל, 0 עד 99: הערכה של כמה הסרטון צפוי להצליח ברשתות", "Potential score, 0 to 99: an estimate of how well this video should perform"))}>
                     <span className="score" style={{ "--v": v.score, "--c": scoreColor(v.score) }}>{v.score}</span>
                     <small>{t("ציון", "Score")}</small>
@@ -787,13 +951,56 @@ export default function GilosApp() {
       </section>
     ),
 
+    /* 6א. תצוגה מקדימה של גרסה, עם הערות ותיקונים */
+    vpreview: () => {
+      const v = findVersion(S.pv);
+      if (!v) return <section className="screen">{top(t("תצוגה מקדימה", "Preview"), "versions")}<div className="empty">{t("הגרסה לא נמצאה.", "Version not found.")}</div></section>;
+      const idx = S.versions.findIndex((x) => x.id === v.id);
+      return (
+        <section className="screen" style={{ gap: 12 }}>
+          {top(idx >= 0 ? t(`גרסה ${idx + 1} · ${tr(v.name)}`, `Version ${idx + 1} · ${tr(v.name)}`) : tr(v.name), "versions",
+            <div className="score" style={{ "--v": v.score, "--c": scoreColor(v.score), width: 38, height: 38, fontSize: 11.5 }} title={t("ציון", "Score")}>{v.score}</div>)}
+          <div className="scroll" style={{ gap: 12 }}>
+            <div className={cx("vplayer", S.applying && "busy")} style={{ "--g": v.g }}>
+              {/* הסרטון מתנגן פעם אחת ונעצר. אחרי תיקון הוא נטען מחדש (key חדש) ומתנגן שוב */}
+              {v.vid ? <video key={`${v.id}-${v.rev}`} src={v.vid} autoPlay muted playsInline controls />
+                : v.img ? <img key={`${v.id}-${v.rev}`} src={v.img} alt="" /> // eslint-disable-line @next/next/no-img-element
+                : <div className="vplaceholder">{tr(v.name)}</div>}
+              <span className="tint" style={{ background: v.g }} />
+              {S.subs && <span className="vsubs" dir="auto">{(S.caption || caps[S.cap].text).slice(0, 42)}</span>}
+              {S.watermark && <span className="wm">LOGO</span>}
+              {v.rev > 1 && <span className="revbadge">{t(`תיקון ${v.rev - 1}`, `Edit ${v.rev - 1}`)}</span>}
+              {S.applying && <div className="vapplying"><span className="ring" style={{ width: 54, height: 54 }} /><span>{t("מעדכנים את הגרסה…", "Updating this version…")}</span></div>}
+            </div>
+            <div className="card stack">
+              <h3>{t("הערות ותיקונים לגרסה", "Notes and fixes for this version")}</h3>
+              {v.notes?.length > 0 && (
+                <ol className="notelist">{v.notes.map((n, i) => (<li key={i} dir="auto"><span className="muted small">{t(`תיקון ${i + 1}:`, `Edit ${i + 1}:`)}</span> {n}</li>))}</ol>
+              )}
+              <div className="tags">
+                {QUICK_NOTES.map(([he, eng]) => (
+                  <button key={he} className="chip small" onClick={() => set((s) => ({ note: s.note ? `${s.note}, ${t(he, eng)}` : t(he, eng) }))}>＋ {t(he, eng)}</button>
+                ))}
+              </div>
+              <textarea dir="auto" style={{ height: 84, fontSize: 14 }} aria-label={t("הערות ותיקונים", "Notes and fixes")} value={S.note} onChange={(e) => set({ note: e.target.value })} placeholder={t("מה לשנות? למשל: לקצר את הפתיחה, להגדיל את הכיתוב ולהחליף למוזיקה רגועה", "What should change? e.g. trim the opening, enlarge the captions and switch to calmer music")} />
+              <button className="btn btn-primary btn-sm" disabled={!S.note.trim() || S.applying} onClick={() => applyNote(v)}>{S.applying ? t("מעדכנים…", "Updating…") : t("✨ שליחת התיקון", "✨ Send the fix")}</button>
+            </div>
+          </div>
+          <div className="acts">
+            <button className="act pub" style={{ height: 44 }} disabled={S.applying} onClick={() => toPublish(v)}>{t("פרסום", "Publish")}</button>
+            <button className="act" style={{ height: 44 }} disabled={S.applying} onClick={() => saveVersion(v)}>{v.saved ? t("✓ נשמר", "✓ Saved") : t("שמירה", "Save")}</button>
+          </div>
+        </section>
+      );
+    },
+
     /* 7. פרסום */
     publish: () => (
       <section className="screen" style={{ gap: 11 }}>
         {top(t("פרסום", "Publish"), "versions")}
         <div className="scroll" style={{ gap: 11 }}>
           <div style={{ display: "grid", gridTemplateColumns: "76px minmax(0, 1fr)", gap: 10, flex: "none" }}>
-            <Thumb g={S.chosen?.g} style={{ height: 112 }}><Cover img={S.chosen?.img} g={S.chosen?.g} /></Thumb>
+            <Thumb g={S.chosen?.g} style={{ height: 112 }}><Cover img={S.chosen?.img} vid={S.chosen?.vid} g={S.chosen?.g} /></Thumb>
             <textarea dir="auto" style={{ height: 112, fontSize: 14 }} aria-label={t("כיתוב", "Caption")} value={S.caption} onChange={(e) => set({ caption: e.target.value })} />
           </div>
           <div className="tags">
