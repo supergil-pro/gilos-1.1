@@ -237,9 +237,9 @@ nav button.on { color: var(--blue); filter: drop-shadow(0 0 6px rgba(30, 155, 25
 .thumb .wm { position: absolute; top: 6px; right: 6px; font-size: 9px; font-family: var(--font-orbitron), sans-serif; opacity: 0.85; }
 .tray { display: flex; gap: 8px; min-height: 64px; align-items: center; overflow-x: auto; scrollbar-width: none; flex: none; }
 .tray .thumb { width: 58px; height: 58px; display: flex; align-items: flex-end; justify-content: center; font-size: 10px; padding-bottom: 4px; }
-.src { height: 74px; border-radius: 14px; border: 1px dashed #3a3a48; background: transparent; color: #ddd; font-size: 12.5px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; transition: 0.2s; }
-.src:active { border-color: var(--blue); box-shadow: 0 0 10px var(--blue); }
-.src span { font-size: 20px; }
+.src { background: none; border: none; padding: 0; color: #ddd; font-size: 12.5px; display: flex; flex-direction: column; align-items: center; gap: 7px; }
+.src i { width: 62px; height: 62px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--c); border: 1.5px solid var(--c); background: color-mix(in srgb, var(--c) 7%, #000); box-shadow: 0 0 10px color-mix(in srgb, var(--c) 55%, transparent), inset 0 0 14px color-mix(in srgb, var(--c) 22%, transparent); transition: transform 0.15s ease, box-shadow 0.2s; }
+.src:active i { transform: scale(0.92); box-shadow: 0 0 20px var(--c), inset 0 0 18px color-mix(in srgb, var(--c) 40%, transparent); }
 .ver { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 12px; animation: rise 0.35s ease both; }
 .ver.gone { animation: out 0.3s ease forwards; }
 .ver.saved { border-color: var(--yellow); box-shadow: 0 0 9px rgba(255, 230, 0, 0.4); }

@@ -41,7 +41,12 @@ const IDEAS = [
   "לפני / אחרי: שתי תמונות של עבודה שסיימתם השבוע.",
   "ענו בסרטון על שאלה שלקוחות שואלים הכי הרבה.",
 ];
-const SOURCES = [["גלריה", "🖼️"], ["מצלמה", "📷"], ["מחשב", "💻"], ["קישור", "🔗"]];
+const SOURCES = [
+  ["גלריה", "var(--blue)", <g key="i"><rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="8.5" cy="9.5" r="1.6" /><path d="M21 16l-5-5-8 8" /></g>],
+  ["מצלמה", "var(--red)", <g key="i"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" /><circle cx="12" cy="13" r="3.4" /></g>],
+  ["מחשב", "var(--yellow)", <g key="i"><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></g>],
+  ["קישור", "var(--green)", <g key="i"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></g>],
+];
 const TRACKS = ["קצבי", "רגוע", "קיצי"];
 const SLOTS = ["היום 20:00", "מחר 09:00", "מחר 18:00"];
 const DAYS = ["א", "ב", "ג", "ד", "ה", "ו", "ש"];
@@ -315,7 +320,12 @@ export default function GilosApp() {
       return (
         <section className="screen">
           <Top title="העלאת מדיה" onBack={() => go("home")} />
-          <div className="grid4">{SOURCES.map(([s, icon]) => (<button key={s} className="src" onClick={() => add(s)}><span>{icon}</span>{s}</button>))}</div>
+          <div className="grid4">{SOURCES.map(([s, c, icon]) => (
+            <button key={s} className="src" style={{ "--c": c }} onClick={() => add(s)}>
+              <i><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{icon}</svg></i>
+              {s}
+            </button>
+          ))}</div>
           <div className="tray">
             {S.media.length ? S.media.map((m) => (
               <Thumb key={m.id} g={m.g}>{m.t}<button className="x" aria-label="הסרה" onClick={() => set((s) => ({ media: s.media.filter((x) => x.id !== m.id) }))}>×</button></Thumb>
