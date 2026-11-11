@@ -19,7 +19,12 @@ async function soundza(q, page, type) {
   if (res.status === 429) return { error: "rate_limited" };
   if (!res.ok) return { error: "source_failed" };
   const data = await res.json();
-  const previewOf = (s) => s.listen_url || (Array.isArray(s.preview_files) ? s.preview_files[0]?.url || s.preview_files[0] : s.preview_files && (s.preview_files.mp3 || Object.values(s.preview_files)[0])) || null;
+  // preview_files הוא מערך של { type, bitrate, link }. בוחרים MP3, באיכות הגבוהה ביותר
+  const previewOf = (s) => {
+    const files = Array.isArray(s.preview_files) ? s.preview_files.filter((f) => f && typeof f.link === "string") : [];
+    const mp3 = files.filter((f) => !f.type || /mpeg|mp3/i.test(f.type)).sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+    return (mp3[0] || files[0])?.link || (typeof s.listen_url === "string" ? s.listen_url : null);
+  };
   return {
     keyless: !key, searchId: data.search_id || null, hasMore: !!data.next_page,
     total: data.total_results ?? (data.sounds || []).length,
