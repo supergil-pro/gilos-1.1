@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { supabase } from "@/lib/supabase";
-import VideoEditor, { captionFromPost } from "./VideoEditor";
+import VideoEditor from "./VideoEditor";
 
 /* ---------- נתונים קבועים ---------- */
 const SUPPORT_EMAIL = "postenter@gmail.com";
@@ -204,7 +204,7 @@ const INITIAL = {
   profiles: [], pid: null, newProf: "", prev: "home", quizFrom: "auth",
   uid: null, busy: false, authNote: "", confirmDelete: false,
   connecting: null,
-  mediaSel: null, camTry: 0, pv: null, note: "", picks: [], aiN: 0, applying: false,
+  mediaSel: null, camTry: 0, pv: null, pvLoop: false, note: "", picks: [], aiN: 0, applying: false,
   camFacing: "environment", camMode: "photo", camZoom: 1, camHW: null, camTorchOK: false, camTorch: false, camRatio: "full", camGrid: false, camTimer: 0, countdown: 0, camDims: null, camError: "", camReady: false, recording: false, recSec: 0,
 };
 // השדות ששייכים לפרופיל (ולא לחשבון): הגדרות, שאלון, האשטגים, חשבונות מחוברים ולוח תוכן
@@ -1578,7 +1578,7 @@ export default function GilosApp() {
           header={top(t("חלון עריכה", "Editor"), "vpreview")}
           filter={fxFilter(fx)} effectName={fx.lookName ? t(fx.lookName[0], fx.lookName[1]) : ""}
           logo={logoImg ? { src: logoImg, color: logoColor } : null} logoCfg={lc}
-          defaults={{ caps: fx.subs ?? S.subs, bigCaps: !!fx.bigSubs, logo: fx.logo ?? S.watermark, capText: captionFromPost(S.caption || caps[S.cap].text) }}
+          defaults={{ caps: fx.subs ?? S.subs, bigCaps: !!fx.bigSubs, logo: fx.logo ?? S.watermark, capText: "" }}
           music={S.sound === "lib" && track?.url ? { url: track.url, title: track.title } : null}
           saved={v.edit} onDone={(res) => finishEdit(v, res)} />
       );
@@ -1596,15 +1596,20 @@ export default function GilosApp() {
           <div className="scroll" style={{ gap: 12 }}>
             <div className={cx("vplayer", S.applying && "busy")} style={{ "--g": v.g }}>
               {/* הסרטון מתנגן פעם אחת ונעצר. אחרי תיקון הוא חוזר להתחלה ומתנגן שוב */}
-              {v.vid ? <video key={`${v.id}-${v.vid}`} ref={pvVideo(v.rev)} src={`${v.vid}#t=0.001`} autoPlay muted playsInline preload="auto" controls style={{ filter: fxFilter(v.fx) }} />
+              {v.vid ? <video key={`${v.id}-${v.vid}`} ref={pvVideo(v.rev)} src={`${v.vid}#t=0.001`} loop={S.pvLoop} autoPlay muted playsInline preload="auto" controls style={{ filter: fxFilter(v.fx) }} />
                 : v.img ? <img key={`${v.id}-${v.rev}`} src={v.img} alt="" style={{ filter: fxFilter(v.fx) }} /> // eslint-disable-line @next/next/no-img-element
                 : <div className="vplaceholder">{tr(v.name)}</div>}
               {fxTint(v.fx) && <span className="tint" style={{ background: v.g }} />}
-              {(v.fx?.subs ?? S.subs) && <span className={cx("vsubs", v.fx?.bigSubs && "big")} dir="auto">{(S.caption || caps[S.cap].text).slice(0, 42)}</span>}
               {(v.fx?.logo ?? S.watermark) && wm(true)}
               <KindBadge kind={verKind(v)} dur={v.vid ? null : v.dur} label={verKind(v) === "image" ? t("תמונה", "Photo") : t("סרטון", "Video")} />
               {v.rev > 1 && <span className="revbadge">{t(`תיקון ${v.rev - 1}`, `Edit ${v.rev - 1}`)}</span>}              {S.applying && <div className="vapplying"><span className="ring" style={{ width: 54, height: 54 }} /><span>{t("מעדכנים את הגרסה…", "Updating this version…")}</span></div>}
             </div>
+            {v.vid && (
+              <button className={cx("chip small looptoggle", S.pvLoop && "on")} aria-pressed={!!S.pvLoop}
+                onClick={(e) => { const on = !S.pvLoop; set({ pvLoop: on }); const el = e.currentTarget.parentElement.querySelector(".vplayer video"); if (on && el?.ended) el.play().catch(() => {}); }}>
+                🔁 {S.pvLoop ? t("ניגון חוזר: פועל", "Loop: on") : t("ניגון חוזר", "Loop")}
+              </button>
+            )}
             <button className="btn btn-primary btn-sm edopen" disabled={S.applying || !editSource(v)} onClick={() => go("editor")}>
               ✂️ {v.baked ? t("חזרה לחלון העריכה", "Back to the editor") : t("חלון עריכה: חיתוך, כיתוב, מוזיקה והפקה", "Editor: trim, captions, music and export")}
             </button>

@@ -618,3 +618,4 @@ nav button { touch-action: manipulation; }
 .capthumb.clean { text-shadow: 0 1px 3px #000; }
 .tc { text-align: center; }
 .rangerow.edtime { grid-template-columns: 24px 1fr 76px; }
+.looptoggle { align-self: flex-start; }
