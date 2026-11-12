@@ -16,7 +16,7 @@ const CAP_STYLES = [
   ["clean", "נקי", "Clean"],
 ];
 const NEON = ["#00E5FF", "#FF2BD6", "#FFE600", "#39FF14"];
-const POP_CHUNK = 4;
+const POP_CHUNK = 3;
 const PREVIEW_SCALE = 1 / 3;
 const MIME_TYPES = ["video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"];
 
@@ -51,7 +51,17 @@ function drawCaption(ctx, W, H, t, dur, cfg, font) {
   ctx.direction = rtl ? "rtl" : "ltr";
 
   let shown = words, active = -1, wordStart = 0, alpha = 1;
-  if (cfg.capStyle === "pop") {
+  // כתוביות מתמלול: כל מילה בזמן שבו היא נאמרת. אם המשתמש תיקן מילים בטקסט ומספר המילים
+  // לא השתנה, התיקון נכנס עם אותו תזמון. אחרת חוזרים לחלוקה שווה לאורך הסרטון
+  const timed = cfg.words?.length === words.length ? cfg.words : null;
+  if (timed) {
+    timed.forEach((w, i) => { if (w.start <= t) active = i; });
+    if (active < 0 || t > timed[active].end + 0.7) return; // שקט: בלי כיתוב
+    wordStart = timed[active].start;
+    const from = Math.floor(active / POP_CHUNK) * POP_CHUNK;
+    shown = words.slice(from, from + POP_CHUNK);
+    if (cfg.capStyle !== "pop") active = -1; // הדגשת המילה רק בסגנון מילה-מילה
+  } else if (cfg.capStyle === "pop") {
     const per = Math.max(dur - 0.3, 0.5) / words.length;
     active = clamp(Math.floor(t / per), 0, words.length - 1);
     wordStart = active * per;
@@ -170,6 +180,49 @@ async function decode(audioCtx, url) {
     return null;
   }
 }
+/* ---------- כתוביות אוטומטיות ---------- */
+const STT_RATE = 16000; // מספיק לדיבור, וקטן: כ-32KB לשנייה
+const STT_MAX_SEC = 120; // מתחת למגבלת הגודל של השרת
+// מחלץ את הסאונד של הקטע שנבחר כקובץ WAV מונו קטן, על המכשיר
+async function extractWav(src, start, end) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const buf = await decode(ctx, src);
+  ctx.close().catch(() => {});
+  if (!buf) return null;
+  const from = clamp(start, 0, buf.duration), len = clamp(end - from, 0, STT_MAX_SEC);
+  if (len < 0.3) return null;
+  const off = new OfflineAudioContext(1, Math.ceil(len * STT_RATE), STT_RATE);
+  const s = off.createBufferSource();
+  s.buffer = buf;
+  s.connect(off.destination);
+  s.start(0, from, len);
+  const pcm = (await off.startRendering()).getChannelData(0);
+  const out = new DataView(new ArrayBuffer(44 + pcm.length * 2));
+  const str = (o, v) => [...v].forEach((c, i) => out.setUint8(o + i, c.charCodeAt(0)));
+  str(0, "RIFF"); out.setUint32(4, 36 + pcm.length * 2, true); str(8, "WAVE"); str(12, "fmt ");
+  out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, 1, true);
+  out.setUint32(24, STT_RATE, true); out.setUint32(28, STT_RATE * 2, true); out.setUint16(32, 2, true); out.setUint16(34, 16, true);
+  str(36, "data"); out.setUint32(40, pcm.length * 2, true);
+  pcm.forEach((v, i) => out.setInt16(44 + i * 2, clamp(v, -1, 1) * 0x7fff, true));
+  return { blob: new Blob([out], { type: "audio/wav" }), cut: end - from > STT_MAX_SEC };
+}
+// שולח לשרת ומחזיר מילים עם תזמון, או { error } עם קוד
+async function transcribeClip(src, start, end, language) {
+  const wav = await extractWav(src, start, end);
+  if (!wav) return { error: "no_audio" };
+  const form = new FormData();
+  form.append("file", wav.blob, "audio.wav");
+  if (language) form.append("language", language);
+  try {
+    const res = await fetch("/api/transcribe", { method: "POST", body: form });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: data.error?.code || "server_error" };
+    return { words: data.words || [], cut: wav.cut };
+  } catch {
+    return { error: "network" };
+  }
+}
+
 const pickMime = () => (typeof MediaRecorder === "undefined" ? null : MIME_TYPES.find((m) => MediaRecorder.isTypeSupported(m)) || "");
 export const canRender = () => typeof window !== "undefined" && typeof MediaRecorder !== "undefined" && !!HTMLCanvasElement.prototype.captureStream;
 
@@ -294,6 +347,7 @@ export default function VideoEditor({ t, header, version, source, filter, effect
   const [pos, setPos] = useState(0);
   const [job, setJob] = useState(null); // { p } בזמן הפקה
   const [result, setResult] = useState(null);
+  const [stt, setStt] = useState(false); // תמלול בתהליך
   const up = (patch) => setCfg((c) => ({ ...c, ...patch }));
 
   const canvasRef = useRef(null), vidRef = useRef(null), audRef = useRef(null), imgRef = useRef(null);
@@ -382,6 +436,9 @@ export default function VideoEditor({ t, header, version, source, filter, effect
   // שינוי נקודות החיתוך מזיז את הסרטון לנקודה כדי שרואים אותה
   const setTrim = (k, val) => {
     const next = k === "start" ? { start: clamp(val, 0, cfg.end - 1) } : { end: clamp(val, cfg.start + 1, dur) };
+    // תזמון הכתוביות נמדד מתחילת הקטע: כשההתחלה זזה, הוא זז איתה
+    const d = k === "start" ? next.start - cfg.start : 0;
+    if (d && cfg.words?.length) next.words = cfg.words.map((w) => ({ ...w, start: w.start - d, end: w.end - d }));
     up(next);
     if (vidRef.current) vidRef.current.currentTime = k === "start" ? next.start : Math.max(0, next.end - 0.5);
   };
@@ -435,7 +492,27 @@ export default function VideoEditor({ t, header, version, source, filter, effect
   );
 
   const [RW, RH] = RATIOS[cfg.ratio];
-  const busy = !!job;
+  const busy = !!job || stt;
+
+  // כתוביות אוטומטיות: מתמללים את הקטע שנבחר, והמילים נכנסות עם התזמון שלהן
+  const STT_ERRORS = {
+    not_configured: t("שירות הכתוביות האוטומטיות עוד לא מחובר.", "Automatic captions aren't connected yet."),
+    rate_limited: t("יותר מדי בקשות כרגע. נסו שוב בעוד דקה.", "Too many requests right now. Try again in a minute."),
+    too_large: t("הקטע ארוך מדי. קצרו אותו בלשונית החיתוך.", "The clip is too long. Shorten it in the Trim tab."),
+    no_audio: t("לא הצלחנו לקרוא את הסאונד של הסרטון.", "We couldn't read the video's sound."),
+    network: t("אין חיבור לאינטרנט. נסו שוב.", "No internet connection. Try again."),
+  };
+  const autoCaptions = async () => {
+    if (!isVideo || stt || job) return;
+    setStt(true);
+    const res = await transcribeClip(source.src, cfg.start, cfg.end || dur);
+    setStt(false);
+    if (res.error) return toast(STT_ERRORS[res.error] || t("התמלול נכשל. נסו שוב.", "Transcription failed. Try again."));
+    if (!res.words.length) return toast(t("לא זוהה דיבור בקטע הזה", "No speech found in this part"));
+    up({ caps: true, capStyle: "pop", words: res.words, capText: res.words.map((w) => w.word).join(" ") });
+    toast(res.cut ? t("הכתוביות נוצרו לשתי הדקות הראשונות", "Captions were made for the first two minutes")
+      : t("הכתוביות נוצרו ✨ אפשר לתקן מילים בטקסט", "Captions are ready ✨ You can fix words in the text"));
+  };
   return (
     <section className="screen" style={{ gap: 12 }}>
       {header}
@@ -443,7 +520,7 @@ export default function VideoEditor({ t, header, version, source, filter, effect
         <div className="edstage">
           <canvas ref={canvasRef} className="edcanvas" style={{ aspectRatio: `${RW} / ${RH}` }} onClick={busy ? undefined : togglePlay} aria-label={t("תצוגה מקדימה של העריכה", "Edit preview")} />
           {!playing && !busy && <button className="edplay" onClick={togglePlay} aria-label={t("ניגון", "Play")}>▶</button>}
-          {busy && <div className="vapplying"><span className="ring" style={{ width: 54, height: 54 }} /><span>{t("מפיקים את הסרטון…", "Exporting your video…")} {Math.round(job.p * 100)}%</span></div>}
+          {busy && <div className="vapplying"><span className="ring" style={{ width: 54, height: 54 }} /><span>{job ? `${t("מפיקים את הסרטון…", "Exporting your video…")} ${Math.round(job.p * 100)}%` : t("מתמללים את הדיבור…", "Transcribing the speech…")}</span></div>}
         </div>
         {isVideo && <video ref={vidRef} src={source.src} playsInline preload="auto" muted={!cfg.orig} onLoadedMetadata={onMeta} onPause={() => setPlaying(false)} style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }} />}
         {music && <audio ref={audRef} src={music.url} preload="auto" loop />}
@@ -491,7 +568,14 @@ export default function VideoEditor({ t, header, version, source, filter, effect
             <div className="row"><h3>{t("כיתוב על הסרטון", "Captions on the video")}</h3><Switch on={cfg.caps} onClick={() => up({ caps: !cfg.caps })} label={t("כיתוב על הסרטון", "Captions on the video")} /></div>
             {cfg.caps && <>
               <textarea dir="auto" style={{ height: 76, fontSize: 14 }} value={cfg.capText} onChange={(e) => up({ capText: e.target.value })} aria-label={t("טקסט הכיתוב", "Caption text")} placeholder={t("מה יופיע על הסרטון", "What appears on the video")} disabled={busy} />
-              <span className="muted small">{t("בקרוב: כיתוב אוטומטי ממה שנאמר בסרטון", "Coming soon: automatic captions from what's said")}</span>
+              {isVideo && (
+                <button className="btn btn-soft btn-sm" onClick={autoCaptions} disabled={busy}>
+                  {stt ? t("מתמללים את הדיבור…", "Transcribing…") : cfg.words?.length ? t("✨ ליצור שוב ממה שנאמר", "✨ Make again from speech") : t("✨ כתוביות אוטומטיות ממה שנאמר", "✨ Auto captions from speech")}
+                </button>
+              )}
+              {cfg.words?.length > 0 && <span className="muted small">{cfg.capText.split(/\s+/).filter(Boolean).length === cfg.words.length
+                ? t("הכתוביות מתוזמנות לדיבור. אפשר לתקן מילה, בלי להוסיף או למחוק מילים.", "Captions follow the speech. You can fix a word, without adding or removing words.")
+                : t("מספר המילים השתנה, אז הכיתוב מתחלק שווה לאורך הסרטון.", "The word count changed, so the caption is spread evenly over the video.")}</span>}
               <div className="row start" style={{ gap: 8, flexWrap: "wrap" }}>
                 {CAP_STYLES.map(([k, he, en]) => (
                   <button key={k} className={`tile capstyle ${cfg.capStyle === k ? "on" : ""}`} aria-pressed={cfg.capStyle === k} onClick={() => up({ capStyle: k })} disabled={busy}>
@@ -546,7 +630,9 @@ export default function VideoEditor({ t, header, version, source, filter, effect
           </div>
         )}
       </div>
-      {busy
+      {stt
+        ? <button className="btn btn-outline" style={{ height: 48, fontSize: 15 }} disabled>{t("מתמללים…", "Transcribing…")}</button>
+        : job
         ? <button className="btn btn-outline" style={{ height: 48, fontSize: 15 }} onClick={() => { cancelRef.current = true; }}>{t("ביטול ההפקה", "Cancel export")}</button>
         : <button className="btn btn-primary" style={{ height: 48, fontSize: 15 }} onClick={exportVideo}>{result ? t("🎬 הפקה מחדש", "🎬 Export again") : t("🎬 הפקת הסרטון", "🎬 Export the video")}</button>}
       <span className="muted small tc">{t("ההפקה נעשית על המכשיר ולוקחת בערך את אורך הסרטון. השאירו את החלון פתוח עד שהיא מסתיימת.", "Export runs on your device and takes about as long as the video. Keep this window open until it finishes.")}</span>
