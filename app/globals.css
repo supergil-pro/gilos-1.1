@@ -602,3 +602,19 @@ nav button { touch-action: manipulation; }
 .lic.ai { background: rgba(176, 38, 255, 0.18); color: #d6a4ff; }
 .poweredby { display: block; font-size: 11.5px; color: var(--muted); text-decoration: none; margin: 4px auto 0; direction: ltr; }
 .poweredby:hover { color: #fff; }
+
+/* ---------- חלון העריכה ---------- */
+.edopen { flex: none; }
+.edstage { position: relative; flex: none; display: flex; justify-content: center; background: #05050a; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; padding: 8px; }
+.edcanvas { display: block; height: min(34vh, 380px); max-width: 100%; border-radius: 10px; cursor: pointer; background: #000; }
+.edplay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 64px; height: 64px; border-radius: 50%; border: 2px solid #fff; background: rgba(0, 0, 0, 0.45); font-size: 22px; box-shadow: 0 0 18px rgba(0, 229, 255, 0.55); }
+.edplay:active { transform: translate(-50%, -50%) scale(0.94); }
+.edresult { width: 100%; max-height: 52vh; border-radius: 12px; background: #000; object-fit: contain; }
+.capstyle { width: 76px; min-height: 84px; }
+.capthumb { width: 52px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 15px; background: #1b1b26; color: #fff; }
+.capthumb.pop { color: #ffe600; text-shadow: 0 0 8px #ffe600; }
+.capthumb.neon { color: #00e5ff; text-shadow: 0 0 6px #00e5ff, 0 0 12px #ff2bd6; }
+.capthumb.box { background: #000; outline: 1px solid #444; }
+.capthumb.clean { text-shadow: 0 1px 3px #000; }
+.tc { text-align: center; }
+.rangerow.edtime { grid-template-columns: 24px 1fr 76px; }

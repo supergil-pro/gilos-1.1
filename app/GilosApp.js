@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { supabase } from "@/lib/supabase";
+import VideoEditor, { captionFromPost } from "./VideoEditor";
 
 /* ---------- נתונים קבועים ---------- */
 const SUPPORT_EMAIL = "postenter@gmail.com";
@@ -1067,6 +1068,23 @@ export default function GilosApp() {
     }, 1200);
   };
 
+  // חלון העריכה: המקור תמיד הקובץ המקורי, גם אחרי שהגרסה כבר הופקה פעם אחת
+  const editSource = (v) => {
+    const vid = v.baked ? v.srcVid : v.vid, img = v.baked ? v.srcImg : v.img;
+    return vid ? { src: vid, kind: "video" } : img ? { src: img, kind: "image" } : null;
+  };
+  const finishEdit = (v, { url, cfg }) => {
+    updateVersion(v.id, (x) => ({
+      ...x, baked: true,
+      srcVid: x.baked ? x.srcVid : x.vid || null, srcImg: x.baked ? x.srcImg : x.img || null, srcFx: x.baked ? x.srcFx : x.fx || {},
+      vid: url, img: null, edit: cfg, rev: (x.rev || 1) + 1,
+      // הכיתוב, הלוגו והאפקט כבר צרובים בקובץ, אז לא מציירים אותם שוב מעליו
+      fx: { look: "baked", lookName: ["ערוך", "Edited"], logo: false, subs: false },
+    }));
+    set({ screen: "vpreview" });
+    toast(t("הגרסה עודכנה לסרטון הערוך", "The version now uses your edited video"));
+  };
+
   const toPublish = (v) => set({ chosen: v, caption: caps[S.cap].text, screen: "publish" });
   const saveVersion = (v) => {
     if (v.saved) return;
@@ -1540,6 +1558,22 @@ export default function GilosApp() {
       </section>
     ),
 
+    /* 6ב. חלון עריכה: חיתוך, כיתוב, סאונד והפקה על המכשיר */
+    editor: () => {
+      const v = findVersion(S.pv);
+      if (!v) return <section className="screen">{top(t("חלון עריכה", "Editor"), "versions")}<div className="empty">{t("הגרסה לא נמצאה.", "Version not found.")}</div></section>;
+      const fx = (v.baked ? v.srcFx : v.fx) || {};
+      return (
+        <VideoEditor key={v.id} t={t} version={v} source={editSource(v)} Switch={Switch} toast={toast}
+          header={top(t("חלון עריכה", "Editor"), "vpreview")}
+          filter={fxFilter(fx)} effectName={fx.lookName ? t(fx.lookName[0], fx.lookName[1]) : ""}
+          logo={logoImg ? { src: logoImg, color: logoColor } : null} logoCfg={lc}
+          defaults={{ caps: fx.subs ?? S.subs, bigCaps: !!fx.bigSubs, logo: fx.logo ?? S.watermark, capText: captionFromPost(S.caption || caps[S.cap].text) }}
+          music={S.sound === "lib" && track?.url ? { url: track.url, title: track.title } : null}
+          saved={v.edit} onDone={(res) => finishEdit(v, res)} />
+      );
+    },
+
     /* 6א. תצוגה מקדימה של גרסה, עם הערות ותיקונים */
     vpreview: () => {
       const v = findVersion(S.pv);
@@ -1562,6 +1596,9 @@ export default function GilosApp() {
               {v.rev > 1 && <span className="revbadge">{t(`תיקון ${v.rev - 1}`, `Edit ${v.rev - 1}`)}</span>}
               {S.applying && <div className="vapplying"><span className="ring" style={{ width: 54, height: 54 }} /><span>{t("מעדכנים את הגרסה…", "Updating this version…")}</span></div>}
             </div>
+            <button className="btn btn-primary btn-sm edopen" disabled={S.applying || !editSource(v)} onClick={() => go("editor")}>
+              ✂️ {v.baked ? t("חזרה לחלון העריכה", "Back to the editor") : t("חלון עריכה: חיתוך, כיתוב, מוזיקה והפקה", "Editor: trim, captions, music and export")}
+            </button>
             <div className="card stack logocard">
               <div className="row">
                 <h3>{t("לוגו", "Logo")}</h3>
