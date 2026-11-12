@@ -70,9 +70,8 @@ function drawCaption(ctx, W, H, t, dur, cfg, font) {
     if (cfg.capStyle === "box") {
       const bw = line.width + fs * 0.9, bh = lineH * 0.98;
       ctx.fillStyle = "rgba(0,0,0,0.62)";
-      ctx.beginPath();
-      ctx.roundRect((W - bw) / 2, y - bh / 2, bw, bh, fs * 0.25);
-      ctx.fill();
+      if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect((W - bw) / 2, y - bh / 2, bw, bh, fs * 0.25); ctx.fill(); }
+      else ctx.fillRect((W - bw) / 2, y - bh / 2, bw, bh); // ספארי ישן בלי פינות מעוגלות
     }
     let x = rtl ? W / 2 + line.width / 2 : W / 2 - line.width / 2;
     for (const word of line.items) {
@@ -157,6 +156,20 @@ const waitFor = (el, ok, bad = "error", ms = 15000) => new Promise((res, rej) =>
   const done = () => { clearTimeout(timer); el.removeEventListener(ok, yes); el.removeEventListener(bad, no); };
   el.addEventListener(ok, yes); el.addEventListener(bad, no);
 });
+// מפענח קובץ שמע או וידאו לזיכרון. null אם אי אפשר (פורמט לא נתמך, או שרת שחוסם)
+async function decode(audioCtx, url) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.arrayBuffer();
+    return await new Promise((ok, fail) => {
+      const p = audioCtx.decodeAudioData(data, ok, fail); // ספארי ישן מכיר רק את צורת ה-callback
+      if (p?.then) p.then(ok, fail);
+    });
+  } catch {
+    return null;
+  }
+}
 const pickMime = () => (typeof MediaRecorder === "undefined" ? null : MIME_TYPES.find((m) => MediaRecorder.isTypeSupported(m)) || "");
 export const canRender = () => typeof window !== "undefined" && typeof MediaRecorder !== "undefined" && !!HTMLCanvasElement.prototype.captureStream;
 
@@ -168,7 +181,7 @@ async function renderVideo({ source, cfg, filter, logo, font, music, audioCtx, o
   const ctx = canvas.getContext("2d");
   const dest = audioCtx.createMediaStreamDestination();
   const cleanup = [];
-  let musicFailed = false;
+  let musicFailed = false, origBuf = null, musicBuf = null;
 
   let media, mw, mh, dur;
   if (source.kind === "video") {
@@ -178,9 +191,17 @@ async function renderVideo({ source, cfg, filter, logo, font, music, audioCtx, o
     document.body.appendChild(el);
     cleanup.push(() => { el.pause(); el.remove(); });
     if (el.readyState < 1) await waitFor(el, "loadedmetadata");
-    const gain = audioCtx.createGain();
-    gain.gain.value = cfg.orig ? cfg.origVol : 0;
-    audioCtx.createMediaElementSource(el).connect(gain).connect(dest);
+    if (cfg.orig && cfg.origVol > 0) {
+      // הסאונד המקורי מפוענח מהקובץ עצמו. זה עובד גם באייפון, שבו חיבור ישיר של
+      // אלמנט הווידאו למנוע הסאונד מחזיר לפעמים שקט
+      origBuf = await decode(audioCtx, source.src);
+      if (!origBuf) {
+        const gain = audioCtx.createGain();
+        gain.gain.value = cfg.origVol;
+        audioCtx.createMediaElementSource(el).connect(gain).connect(dest);
+      }
+    }
+    if (origBuf || !cfg.orig || cfg.origVol <= 0) el.muted = true;
     el.currentTime = cfg.start;
     await waitFor(el, "seeked");
     media = el; mw = el.videoWidth; mh = el.videoHeight; dur = cfg.end - cfg.start;
@@ -189,26 +210,31 @@ async function renderVideo({ source, cfg, filter, logo, font, music, audioCtx, o
     mw = media.naturalWidth; mh = media.naturalHeight; dur = cfg.imgDur;
   }
 
-  let musicEl = null;
-  if (music && cfg.music) {
-    musicEl = new Audio();
-    musicEl.crossOrigin = "anonymous";
-    musicEl.src = music.url;
-    musicEl.loop = true;
-    try {
-      await waitFor(musicEl, "canplay", "error", 10000);
-      const g = audioCtx.createGain();
-      const now = audioCtx.currentTime;
+  if (music && cfg.music && cfg.musicVol > 0) {
+    musicBuf = await decode(audioCtx, music.url);
+    musicFailed = !musicBuf; // השרת של השיר לא מאפשר עיבוד בדפדפן: ממשיכים בלי מוזיקה
+  }
+  // מתזמן את הסאונד (המקורי והמוזיקה) לרגע שבו ההקלטה מתחילה
+  const startAudio = () => {
+    const now = audioCtx.currentTime;
+    if (origBuf) {
+      const s = audioCtx.createBufferSource(), g = audioCtx.createGain();
+      s.buffer = origBuf; g.gain.value = cfg.origVol;
+      s.connect(g).connect(dest);
+      s.start(now, Math.min(cfg.start, origBuf.duration), dur);
+      cleanup.push(() => { try { s.stop(); } catch {} });
+    }
+    if (musicBuf) {
+      const s = audioCtx.createBufferSource(), g = audioCtx.createGain();
+      s.buffer = musicBuf; s.loop = true;
       g.gain.setValueAtTime(cfg.musicVol, now);
       g.gain.setValueAtTime(cfg.musicVol, now + Math.max(0, dur - 0.8));
       g.gain.linearRampToValueAtTime(0, now + dur); // המוזיקה דועכת בסוף
-      audioCtx.createMediaElementSource(musicEl).connect(g).connect(dest);
-      cleanup.push(() => musicEl.pause());
-    } catch {
-      musicFailed = true; // השרת של השיר לא מאפשר עיבוד בדפדפן: ממשיכים בלי מוזיקה
-      musicEl = null;
+      s.connect(g).connect(dest);
+      s.start(now);
+      cleanup.push(() => { try { s.stop(); } catch {} });
     }
-  }
+  };
 
   const stream = canvas.captureStream(30);
   dest.stream.getAudioTracks().forEach((tr) => stream.addTrack(tr));
@@ -222,18 +248,26 @@ async function renderVideo({ source, cfg, filter, logo, font, music, audioCtx, o
   frame(0);
   rec.start(250);
   if (source.kind === "video") await media.play();
-  if (musicEl) await musicEl.play().catch(() => {});
+  startAudio();
   const t0 = performance.now();
 
   await new Promise((resolve) => {
+    // רענון מסך הוא הקצב הרגיל. טיימר גיבוי ממשיך לבדוק גם כשהדפדפן מקפיא את הציור
+    // (מסך נעול, אפליקציה אחרת), כדי שביטול לא ייתקע
+    const next = () => {
+      let ran = false;
+      const go = () => { if (!ran) { ran = true; tick(); } };
+      requestAnimationFrame(go);
+      setTimeout(go, 150);
+    };
     const tick = () => {
       const t = source.kind === "video" ? media.currentTime - cfg.start : (performance.now() - t0) / 1000;
       if (cancelled() || t >= dur || (source.kind === "video" && media.ended)) return resolve();
       frame(clamp(t, 0, dur));
       onProgress(clamp(t / dur, 0, 1));
-      requestAnimationFrame(tick);
+      next();
     };
-    requestAnimationFrame(tick);
+    next();
   });
   frame(dur);
   rec.stop();
@@ -365,6 +399,10 @@ export default function VideoEditor({ t, header, version, source, filter, effect
     if (result) URL.revokeObjectURL(result.url);
     setResult(null);
     setJob({ p: 0 });
+    // יציאה מהאפליקציה באמצע (מסך נעול, מעבר לאפליקציה אחרת) עוצרת את ההפקה
+    let left = false;
+    const onHide = () => { if (document.hidden) { left = true; cancelRef.current = true; } };
+    document.addEventListener("visibilitychange", onHide);
     try {
       const res = await renderVideo({
         source, cfg, filter, logo: logoRef.current, font: fontRef.current, music, audioCtx,
@@ -375,10 +413,13 @@ export default function VideoEditor({ t, header, version, source, filter, effect
         setResult(res);
         if (res.musicFailed) toast(t("הסרטון מוכן, אבל בלי המוזיקה: השיר הזה לא זמין להפקה בדפדפן. נסו שיר אחר.", "The video is ready, but without music: this track can't be processed in the browser. Try another track."));
         else toast(t("הסרטון מוכן 🎬", "Your video is ready 🎬"));
+      } else if (left) {
+        toast(t("ההפקה נעצרה כי יצאתם מהאפליקציה. נסו שוב, והשאירו את המסך פתוח עד הסוף.", "Export stopped because you left the app. Try again and keep the screen open until it ends."));
       }
     } catch {
       toast(t("ההפקה נכשלה. נסו שוב, או בחרו קטע קצר יותר.", "Export failed. Try again, or pick a shorter clip."));
     } finally {
+      document.removeEventListener("visibilitychange", onHide);
       setJob(null);
       audioCtx.close().catch(() => {});
     }

@@ -204,7 +204,7 @@ const INITIAL = {
   profiles: [], pid: null, newProf: "", prev: "home", quizFrom: "auth",
   uid: null, busy: false, authNote: "", confirmDelete: false,
   connecting: null,
-  mediaSel: null, camTry: 0, pv: null, note: "", picks: [], aiN: 0, applying: false,
+  mediaSel: null, camTry: 0, pv: null, pvSound: false, note: "", picks: [], aiN: 0, applying: false,
   camFacing: "environment", camMode: "photo", camZoom: 1, camHW: null, camTorchOK: false, camTorch: false, camRatio: "full", camGrid: false, camTimer: 0, countdown: 0, camDims: null, camError: "", camReady: false, recording: false, recSec: 0,
 };
 // השדות ששייכים לפרופיל (ולא לחשבון): הגדרות, שאלון, האשטגים, חשבונות מחוברים ולוח תוכן
@@ -1052,7 +1052,25 @@ export default function GilosApp() {
     toast(t(`✨ ${e.he} — לחצו שוב לאפקט אחר`, `✨ ${e.en} — tap again for another`));
   };
   // ההערה הנשלחת: התיקונים המהירים שנבחרו ואחריהם הטקסט החופשי
-  const composedNote = [...S.picks.map((k) => { const q = QUICK_NOTES.find((x) => x[0] === k); return t(q[2], q[3]); }), S.note.trim()].filter(Boolean).join(", ");
+  // QUICK_NOTES: [מזהה, צבע התחלה, צבע סוף, עברית, אנגלית]
+  const composedNote = [...S.picks.map((k) => { const q = QUICK_NOTES.find((x) => x[0] === k); return t(q[3], q[4]); }), S.note.trim()].filter(Boolean).join(", ");
+  // נגן התצוגה המקדימה: לא נבנה מחדש אחרי תיקון (באייפון נגן חדש לא תמיד מתחיל לבד),
+  // אלא חוזר להתחלה ומנגן שוב. הסאונד נשלט מהכפתור, כי ניגון אוטומטי מותר רק בלי קול.
+  const pvVideo = (rev) => (el) => {
+    if (!el) return;
+    el.muted = !S.pvSound;
+    if (el.dataset.rev !== String(rev)) {
+      el.dataset.rev = String(rev);
+      el.currentTime = 0;
+      el.play().catch(() => {});
+    }
+  };
+  const toggleSound = (e) => {
+    const el = e.currentTarget.parentElement.querySelector("video");
+    const on = !S.pvSound;
+    set({ pvSound: on });
+    if (el) { el.muted = !on; if (on) el.play().catch(() => {}); }
+  };
   const applyNote = (v) => {
     const note = composedNote;
     if (!note || S.applying) return;
@@ -1585,8 +1603,8 @@ export default function GilosApp() {
             <div className="score" style={{ "--v": v.score, "--c": scoreColor(v.score), width: 38, height: 38, fontSize: 11.5 }} title={t("ציון", "Score")}>{v.score}</div>)}
           <div className="scroll" style={{ gap: 12 }}>
             <div className={cx("vplayer", S.applying && "busy")} style={{ "--g": v.g }}>
-              {/* הסרטון מתנגן פעם אחת ונעצר. אחרי תיקון הוא נטען מחדש (key חדש) ומתנגן שוב */}
-              {v.vid ? <video key={`${v.id}-${v.rev}`} src={v.vid} autoPlay muted playsInline controls style={{ filter: fxFilter(v.fx) }} />
+              {/* הסרטון מתנגן פעם אחת ונעצר. אחרי תיקון הוא חוזר להתחלה ומתנגן שוב */}
+              {v.vid ? <video key={`${v.id}-${v.vid}`} ref={pvVideo(v.rev)} src={`${v.vid}#t=0.001`} autoPlay muted playsInline preload="auto" controls style={{ filter: fxFilter(v.fx) }} />
                 : v.img ? <img key={`${v.id}-${v.rev}`} src={v.img} alt="" style={{ filter: fxFilter(v.fx) }} /> // eslint-disable-line @next/next/no-img-element
                 : <div className="vplaceholder">{tr(v.name)}</div>}
               {fxTint(v.fx) && <span className="tint" style={{ background: v.g }} />}
@@ -1594,6 +1612,7 @@ export default function GilosApp() {
               {(v.fx?.logo ?? S.watermark) && wm(true)}
               <KindBadge kind={verKind(v)} dur={v.vid ? null : v.dur} label={verKind(v) === "image" ? t("תמונה", "Photo") : t("סרטון", "Video")} />
               {v.rev > 1 && <span className="revbadge">{t(`תיקון ${v.rev - 1}`, `Edit ${v.rev - 1}`)}</span>}
+              {v.vid && <button className={cx("soundbtn", S.pvSound && "on")} onClick={toggleSound} aria-pressed={!!S.pvSound} aria-label={S.pvSound ? t("השתקה", "Mute") : t("הפעלת סאונד", "Turn sound on")}>{S.pvSound ? "🔊" : "🔇"}<span>{S.pvSound ? t("סאונד", "Sound") : t("הפעלת סאונד", "Sound on")}</span></button>}
               {S.applying && <div className="vapplying"><span className="ring" style={{ width: 54, height: 54 }} /><span>{t("מעדכנים את הגרסה…", "Updating this version…")}</span></div>}
             </div>
             <button className="btn btn-primary btn-sm edopen" disabled={S.applying || !editSource(v)} onClick={() => go("editor")}>
