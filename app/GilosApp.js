@@ -204,7 +204,7 @@ const INITIAL = {
   profiles: [], pid: null, newProf: "", prev: "home", quizFrom: "auth",
   uid: null, busy: false, authNote: "", confirmDelete: false,
   connecting: null,
-  mediaSel: null, camTry: 0, pv: null, pvSound: false, note: "", picks: [], aiN: 0, applying: false,
+  mediaSel: null, camTry: 0, pv: null, note: "", picks: [], aiN: 0, applying: false,
   camFacing: "environment", camMode: "photo", camZoom: 1, camHW: null, camTorchOK: false, camTorch: false, camRatio: "full", camGrid: false, camTimer: 0, countdown: 0, camDims: null, camError: "", camReady: false, recording: false, recSec: 0,
 };
 // השדות ששייכים לפרופיל (ולא לחשבון): הגדרות, שאלון, האשטגים, חשבונות מחוברים ולוח תוכן
@@ -1054,22 +1054,14 @@ export default function GilosApp() {
   // ההערה הנשלחת: התיקונים המהירים שנבחרו ואחריהם הטקסט החופשי
   // QUICK_NOTES: [מזהה, צבע התחלה, צבע סוף, עברית, אנגלית]
   const composedNote = [...S.picks.map((k) => { const q = QUICK_NOTES.find((x) => x[0] === k); return t(q[3], q[4]); }), S.note.trim()].filter(Boolean).join(", ");
-  // נגן התצוגה המקדימה: לא נבנה מחדש אחרי תיקון (באייפון נגן חדש לא תמיד מתחיל לבד),
-  // אלא חוזר להתחלה ומנגן שוב. הסאונד נשלט מהכפתור, כי ניגון אוטומטי מותר רק בלי קול.
+  // נגן התצוגה המקדימה: לא נבנה מחדש אחרי תיקון, אלא חוזר להתחלה ומנגן שוב.
+  // הוא מתחיל מושתק (ניגון אוטומטי מותר רק בלי קול), ואת הקול מפעילים בכפתור הרמקול של הנגן.
+  // לא נוגעים ב-muted כאן, כדי שבחירת המשתמש נשמרת גם אחרי תיקון
   const pvVideo = (rev) => (el) => {
-    if (!el) return;
-    el.muted = !S.pvSound;
-    if (el.dataset.rev !== String(rev)) {
-      el.dataset.rev = String(rev);
-      el.currentTime = 0;
-      el.play().catch(() => {});
-    }
-  };
-  const toggleSound = (e) => {
-    const el = e.currentTarget.parentElement.querySelector("video");
-    const on = !S.pvSound;
-    set({ pvSound: on });
-    if (el) { el.muted = !on; if (on) el.play().catch(() => {}); }
+    if (!el || el.dataset.rev === String(rev)) return;
+    el.dataset.rev = String(rev);
+    el.currentTime = 0;
+    el.play().catch(() => {});
   };
   const applyNote = (v) => {
     const note = composedNote;
@@ -1611,9 +1603,7 @@ export default function GilosApp() {
               {(v.fx?.subs ?? S.subs) && <span className={cx("vsubs", v.fx?.bigSubs && "big")} dir="auto">{(S.caption || caps[S.cap].text).slice(0, 42)}</span>}
               {(v.fx?.logo ?? S.watermark) && wm(true)}
               <KindBadge kind={verKind(v)} dur={v.vid ? null : v.dur} label={verKind(v) === "image" ? t("תמונה", "Photo") : t("סרטון", "Video")} />
-              {v.rev > 1 && <span className="revbadge">{t(`תיקון ${v.rev - 1}`, `Edit ${v.rev - 1}`)}</span>}
-              {v.vid && <button className={cx("soundbtn", S.pvSound && "on")} onClick={toggleSound} aria-pressed={!!S.pvSound} aria-label={S.pvSound ? t("השתקה", "Mute") : t("הפעלת סאונד", "Turn sound on")}>{S.pvSound ? "🔊" : "🔇"}<span>{S.pvSound ? t("סאונד", "Sound") : t("הפעלת סאונד", "Sound on")}</span></button>}
-              {S.applying && <div className="vapplying"><span className="ring" style={{ width: 54, height: 54 }} /><span>{t("מעדכנים את הגרסה…", "Updating this version…")}</span></div>}
+              {v.rev > 1 && <span className="revbadge">{t(`תיקון ${v.rev - 1}`, `Edit ${v.rev - 1}`)}</span>}              {S.applying && <div className="vapplying"><span className="ring" style={{ width: 54, height: 54 }} /><span>{t("מעדכנים את הגרסה…", "Updating this version…")}</span></div>}
             </div>
             <button className="btn btn-primary btn-sm edopen" disabled={S.applying || !editSource(v)} onClick={() => go("editor")}>
               ✂️ {v.baked ? t("חזרה לחלון העריכה", "Back to the editor") : t("חלון עריכה: חיתוך, כיתוב, מוזיקה והפקה", "Editor: trim, captions, music and export")}
