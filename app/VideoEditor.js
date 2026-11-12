@@ -22,6 +22,30 @@ const MIME_TYPES = ["video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4", "vide
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+// זמן מדויק לעריכה: 1:05.3
+const fmtFine = (s) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, "0")}`;
+const parseTime = (str) => {
+  const m = String(str).trim().match(/^(?:(\d+):)?(\d+(?:\.\d+)?)$/);
+  return m ? (+(m[1] || 0)) * 60 + +m[2] : null;
+};
+
+/* ---------- קטעים: כמה חלקים מאותו סרטון, מחוברים לפי הסדר ---------- */
+const segLen = (s) => Math.max(0, s.end - s.start);
+const totalLen = (segs) => segs.reduce((a, s) => a + segLen(s), 0);
+const segOffset = (segs, i) => totalLen(segs.slice(0, i));
+// זמן בסרטון הסופי ← באיזה קטע הוא נמצא ואיפה בסרטון המקורי
+function locate(segs, t) {
+  let acc = 0;
+  for (let i = 0; i < segs.length; i++) {
+    const L = segLen(segs[i]);
+    if (t < acc + L || i === segs.length - 1) return { i, src: segs[i].start + clamp(t - acc, 0, L) };
+    acc += L;
+  }
+  return { i: 0, src: 0 };
+}
+const segKey = (segs) => segs.map((s) => `${s.start.toFixed(2)}-${s.end.toFixed(2)}`).join("|");
+// סרטון ארוך מזה לא מפוענח כולו לזיכרון בהפקה (זה כבד מדי לטלפון); הסאונד נלקח מהנגן עצמו
+const DECODE_MAX_SEC = 240;
 const hebrew = (s) => /[֐-׿]/.test(s);
 // הכיתוב על הסרטון: בלי האשטגים, שנשארים בטקסט הפוסט
 export const captionFromPost = (text = "") => text.replace(/#[^\s#]+/g, "").replace(/\s+/g, " ").trim();
@@ -53,7 +77,7 @@ function drawCaption(ctx, W, H, t, dur, cfg, font) {
   let shown = words, active = -1, wordStart = 0, alpha = 1;
   // כתוביות מתמלול: כל מילה בזמן שבו היא נאמרת. אם המשתמש תיקן מילים בטקסט ומספר המילים
   // לא השתנה, התיקון נכנס עם אותו תזמון. אחרת חוזרים לחלוקה שווה לאורך הסרטון
-  const timed = cfg.words?.length === words.length ? cfg.words : null;
+  const timed = cfg.words?.length === words.length && cfg.wordsKey === segKey(cfg.segments || []) ? cfg.words : null;
   if (timed) {
     timed.forEach((w, i) => { if (w.start <= t) active = i; });
     if (active < 0 || t > timed[active].end + 0.7) return; // שקט: בלי כיתוב
@@ -182,21 +206,9 @@ async function decode(audioCtx, url) {
 }
 /* ---------- כתוביות אוטומטיות ---------- */
 const STT_RATE = 16000; // מספיק לדיבור, וקטן: כ-32KB לשנייה
-const STT_MAX_SEC = 120; // מתחת למגבלת הגודל של השרת
-// מחלץ את הסאונד של הקטע שנבחר כקובץ WAV מונו קטן, על המכשיר
-async function extractWav(src, start, end) {
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  const buf = await decode(ctx, src);
-  ctx.close().catch(() => {});
-  if (!buf) return null;
-  const from = clamp(start, 0, buf.duration), len = clamp(end - from, 0, STT_MAX_SEC);
-  if (len < 0.3) return null;
-  const off = new OfflineAudioContext(1, Math.ceil(len * STT_RATE), STT_RATE);
-  const s = off.createBufferSource();
-  s.buffer = buf;
-  s.connect(off.destination);
-  s.start(0, from, len);
-  const pcm = (await off.startRendering()).getChannelData(0);
+const STT_CHUNK_SEC = 110; // כל שליחה לשרת: מתחת למגבלת הגודל שלו
+const STT_MAX_SEC = 600; // עד 10 דקות כתוביות לסרטון
+const wavBlob = (pcm) => {
   const out = new DataView(new ArrayBuffer(44 + pcm.length * 2));
   const str = (o, v) => [...v].forEach((c, i) => out.setUint8(o + i, c.charCodeAt(0)));
   str(0, "RIFF"); out.setUint32(4, 36 + pcm.length * 2, true); str(8, "WAVE"); str(12, "fmt ");
@@ -204,23 +216,51 @@ async function extractWav(src, start, end) {
   out.setUint32(24, STT_RATE, true); out.setUint32(28, STT_RATE * 2, true); out.setUint16(32, 2, true); out.setUint16(34, 16, true);
   str(36, "data"); out.setUint32(40, pcm.length * 2, true);
   pcm.forEach((v, i) => out.setInt16(44 + i * 2, clamp(v, -1, 1) * 0x7fff, true));
-  return { blob: new Blob([out], { type: "audio/wav" }), cut: end - from > STT_MAX_SEC };
-}
-// שולח לשרת ומחזיר מילים עם תזמון, או { error } עם קוד
-async function transcribeClip(src, start, end, language) {
-  const wav = await extractWav(src, start, end);
-  if (!wav) return { error: "no_audio" };
-  const form = new FormData();
-  form.append("file", wav.blob, "audio.wav");
-  if (language) form.append("language", language);
-  try {
-    const res = await fetch("/api/transcribe", { method: "POST", body: form });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: data.error?.code || "server_error" };
-    return { words: data.words || [], cut: wav.cut };
-  } catch {
-    return { error: "network" };
+  return new Blob([out], { type: "audio/wav" });
+};
+// מחלץ על המכשיר את הסאונד של כל הקטעים, מחובר לפי הסדר, כקבצי WAV מונו קטנים
+async function extractWavs(src, segs) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const buf = await decode(ctx, src);
+  ctx.close().catch(() => {});
+  if (!buf) return null;
+  const total = Math.min(totalLen(segs), STT_MAX_SEC);
+  if (total < 0.3) return null;
+  const off = new OfflineAudioContext(1, Math.ceil(total * STT_RATE), STT_RATE);
+  let at = 0;
+  for (const sg of segs) {
+    const len = Math.min(segLen(sg), total - at);
+    if (len <= 0) break;
+    const s = off.createBufferSource();
+    s.buffer = buf;
+    s.connect(off.destination);
+    s.start(at, clamp(sg.start, 0, buf.duration), len);
+    at += len;
   }
+  const pcm = (await off.startRendering()).getChannelData(0);
+  const per = STT_CHUNK_SEC * STT_RATE, parts = [];
+  for (let i = 0; i < pcm.length; i += per) parts.push({ blob: wavBlob(pcm.subarray(i, i + per)), offset: i / STT_RATE });
+  return { parts, cut: totalLen(segs) > STT_MAX_SEC };
+}
+// שולח לשרת חלק אחרי חלק, ומחזיר מילים עם תזמון בסרטון הסופי, או { error } עם קוד
+async function transcribeClip(src, segs, language) {
+  const wav = await extractWavs(src, segs);
+  if (!wav) return { error: "no_audio" };
+  const words = [];
+  for (const part of wav.parts) {
+    const form = new FormData();
+    form.append("file", part.blob, "audio.wav");
+    if (language) form.append("language", language);
+    try {
+      const res = await fetch("/api/transcribe", { method: "POST", body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { error: data.error?.code || "server_error" };
+      for (const w of data.words || []) words.push({ ...w, start: w.start + part.offset, end: w.end + part.offset });
+    } catch {
+      return { error: "network" };
+    }
+  }
+  return { words, cut: wav.cut };
 }
 
 const pickMime = () => (typeof MediaRecorder === "undefined" ? null : MIME_TYPES.find((m) => MediaRecorder.isTypeSupported(m)) || "");
@@ -237,27 +277,39 @@ async function renderVideo({ source, cfg, filter, logo, font, music, audioCtx, o
   let musicFailed = false, origBuf = null, musicBuf = null;
 
   let media, mw, mh, dur;
+  const segs = (cfg.segments || []).filter((s) => segLen(s) > 0.05);
   if (source.kind === "video") {
+    if (!segs.length) throw new Error("no segments");
     const el = document.createElement("video");
     Object.assign(el, { src: source.src, playsInline: true, preload: "auto", muted: false });
     el.style.cssText = "position:fixed;width:1px;height:1px;opacity:0;pointer-events:none";
     document.body.appendChild(el);
     cleanup.push(() => { el.pause(); el.remove(); });
     if (el.readyState < 1) await waitFor(el, "loadedmetadata");
+    dur = totalLen(segs);
     if (cfg.orig && cfg.origVol > 0) {
-      // הסאונד המקורי מפוענח מהקובץ עצמו. זה עובד גם באייפון, שבו חיבור ישיר של
-      // אלמנט הווידאו למנוע הסאונד מחזיר לפעמים שקט
-      origBuf = await decode(audioCtx, source.src);
-      if (!origBuf) {
+      // הסאונד המקורי מפוענח מהקובץ, והקטעים מחוברים לרצועה אחת. סרטון ארוך מדי
+      // לפענוח בזיכרון: הסאונד נלקח מהנגן עצמו, שקופץ בין הקטעים יחד עם התמונה
+      const full = el.duration <= DECODE_MAX_SEC ? await decode(audioCtx, source.src) : null;
+      if (full) {
+        const sr = full.sampleRate;
+        origBuf = audioCtx.createBuffer(full.numberOfChannels, Math.max(1, Math.ceil(dur * sr)), sr);
+        let at = 0;
+        for (const sg of segs) {
+          const from = Math.floor(sg.start * sr), n = Math.min(Math.floor(segLen(sg) * sr), full.length - from, origBuf.length - at);
+          for (let ch = 0; ch < full.numberOfChannels; ch++) origBuf.getChannelData(ch).set(full.getChannelData(ch).subarray(from, from + Math.max(0, n)), at);
+          at += Math.floor(segLen(sg) * sr);
+        }
+      } else {
         const gain = audioCtx.createGain();
         gain.gain.value = cfg.origVol;
         audioCtx.createMediaElementSource(el).connect(gain).connect(dest);
       }
     }
     if (origBuf || !cfg.orig || cfg.origVol <= 0) el.muted = true;
-    el.currentTime = cfg.start;
+    el.currentTime = segs[0].start;
     await waitFor(el, "seeked");
-    media = el; mw = el.videoWidth; mh = el.videoHeight; dur = cfg.end - cfg.start;
+    media = el; mw = el.videoWidth; mh = el.videoHeight;
   } else {
     media = await loadImage(source.src);
     mw = media.naturalWidth; mh = media.naturalHeight; dur = cfg.imgDur;
@@ -274,7 +326,7 @@ async function renderVideo({ source, cfg, filter, logo, font, music, audioCtx, o
       const s = audioCtx.createBufferSource(), g = audioCtx.createGain();
       s.buffer = origBuf; g.gain.value = cfg.origVol;
       s.connect(g).connect(dest);
-      s.start(now, Math.min(cfg.start, origBuf.duration), dur);
+      s.start(now);
       cleanup.push(() => { try { s.stop(); } catch {} });
     }
     if (musicBuf) {
@@ -303,6 +355,23 @@ async function renderVideo({ source, cfg, filter, logo, font, music, audioCtx, o
   if (source.kind === "video") await media.play();
   startAudio();
   const t0 = performance.now();
+  let si = 0, acc = 0; // הקטע הנוכחי, וכמה זמן כבר הוקלט לפניו
+
+  // מעבר לקטע הבא: ההקלטה ומנוע הסאונד נעצרים בזמן הקפיצה, כדי שלא ייכנסו לסרטון
+  // פריים קפוא או שקט
+  const nextSegment = async () => {
+    rec.pause();
+    await audioCtx.suspend().catch(() => {});
+    media.pause();
+    acc += segLen(segs[si]);
+    si++;
+    media.currentTime = segs[si].start;
+    await waitFor(media, "seeked").catch(() => {});
+    frame(acc);
+    await media.play().catch(() => {});
+    await audioCtx.resume().catch(() => {});
+    rec.resume();
+  };
 
   await new Promise((resolve) => {
     // רענון מסך הוא הקצב הרגיל. טיימר גיבוי ממשיך לבדוק גם כשהדפדפן מקפיא את הציור
@@ -314,8 +383,13 @@ async function renderVideo({ source, cfg, filter, logo, font, music, audioCtx, o
       setTimeout(go, 150);
     };
     const tick = () => {
-      const t = source.kind === "video" ? media.currentTime - cfg.start : (performance.now() - t0) / 1000;
-      if (cancelled() || t >= dur || (source.kind === "video" && media.ended)) return resolve();
+      if (source.kind === "video" && !cancelled() && (media.currentTime >= segs[si].end - 0.02 || media.ended)) {
+        if (si === segs.length - 1) return resolve();
+        nextSegment().then(next);
+        return;
+      }
+      const t = source.kind === "video" ? acc + (media.currentTime - segs[si].start) : (performance.now() - t0) / 1000;
+      if (cancelled() || t >= dur) return resolve();
       frame(clamp(t, 0, dur));
       onProgress(clamp(t / dur, 0, 1));
       next();
@@ -340,7 +414,10 @@ export default function VideoEditor({ t, header, version, source, filter, effect
     orig: true, origVol: 1, music: !!music, musicVol: 0.6,
     effect: true, logo: defaults.logo && !!logo, logoCfg,
     ...(saved || {}),
+    // עריכה ישנה שמרה התחלה וסוף אחד: הופך לקטע אחד
+    segments: saved?.segments?.length ? saved.segments : [{ start: saved?.start || 0, end: saved?.end || 0 }],
   }));
+  const segRef = useRef(0); // באיזה קטע התצוגה המקדימה נמצאת
   const [tab, setTab] = useState("cut");
   const [dur, setDur] = useState(0); // אורך המקור
   const [playing, setPlaying] = useState(false);
@@ -354,7 +431,9 @@ export default function VideoEditor({ t, header, version, source, filter, effect
   const logoRef = useRef(null), fontRef = useRef("sans-serif"), cfgRef = useRef(cfg), stateRef = useRef({});
   const cancelRef = useRef(false);
   const isVideo = source?.kind === "video";
-  const outDur = isVideo ? Math.max(0, cfg.end - cfg.start) : cfg.imgDur;
+  const segs = cfg.segments;
+  const outDur = isVideo ? totalLen(segs) : cfg.imgDur;
+  const curSeg = locate(segs, pos).i; // הקטע שמוצג עכשיו, מסומן ברשימה
   // לולאת הציור קוראת את ההגדרות העדכניות מכאן, בלי להתחיל מחדש בכל שינוי
   useEffect(() => {
     cfgRef.current = cfg;
@@ -388,11 +467,16 @@ export default function VideoEditor({ t, header, version, source, filter, effect
         if (isVideo && vidRef.current) {
           const v = vidRef.current;
           media = v; mw = v.videoWidth; mh = v.videoHeight;
-          if (st.playing && v.currentTime >= c.end - 0.03) {
-            v.currentTime = c.start;
-            if (audRef.current) audRef.current.currentTime = 0;
+          const sg = c.segments;
+          let ci = Math.min(segRef.current, sg.length - 1);
+          // סוף קטע: קופצים לקטע הבא, ואחרי האחרון חוזרים לראשון
+          if (st.playing && sg[ci] && v.currentTime >= sg[ci].end - 0.03) {
+            ci = (ci + 1) % sg.length;
+            v.currentTime = sg[ci].start;
+            if (ci === 0 && audRef.current) audRef.current.currentTime = 0;
           }
-          tt = v.currentTime - c.start;
+          segRef.current = ci;
+          tt = sg[ci] ? segOffset(sg, ci) + clamp(v.currentTime - sg[ci].start, 0, segLen(sg[ci])) : 0;
         } else if (imgRef.current) {
           media = imgRef.current; mw = media.naturalWidth; mh = media.naturalHeight;
           if (st.playing) { tt = ((performance.now() - t0) / 1000) % Math.max(st.outDur, 0.1); if (tt < last && audRef.current) audRef.current.currentTime = 0; last = tt; }
@@ -415,7 +499,14 @@ export default function VideoEditor({ t, header, version, source, filter, effect
     const d = vidRef.current?.duration;
     if (!d || !isFinite(d)) return;
     setDur(d);
-    setCfg((c) => ({ ...c, end: c.end > 0 && c.end <= d ? c.end : d, start: c.start < d ? c.start : 0 }));
+    // קטע ראשון בלי סוף = כל הסרטון. קטעים שחורגים מאורך הסרטון נחתכים אליו
+    setCfg((c) => ({
+      ...c,
+      segments: c.segments.map((s) => {
+        const start = s.start < d ? s.start : 0;
+        return { start, end: s.end > start && s.end <= d ? s.end : d };
+      }),
+    }));
   };
   // הסרטון כבר יכול להיות טעון (מהמטמון) לפני שהאירוע מחובר
   useEffect(() => {
@@ -425,22 +516,55 @@ export default function VideoEditor({ t, header, version, source, filter, effect
   const togglePlay = () => {
     const v = vidRef.current, a = audRef.current;
     if (playing) { v?.pause(); a?.pause(); setPlaying(false); return; }
-    if (v) { if (v.currentTime < cfg.start || v.currentTime >= cfg.end - 0.05) v.currentTime = cfg.start; v.play().catch(() => {}); }
+    if (v) {
+      // ממשיכים מהמיקום הנוכחי בסרטון הסופי; בסוף, מתחילים מההתחלה
+      const at = locate(segs, pos >= outDur - 0.05 ? 0 : pos);
+      segRef.current = at.i;
+      v.currentTime = at.src;
+      v.play().catch(() => {});
+    }
     if (a && cfg.music) { a.volume = cfg.musicVol; a.play().catch(() => {}); }
     setPlaying(true);
   };
   const seek = (s) => {
     setPos(s);
-    if (vidRef.current) vidRef.current.currentTime = cfg.start + s;
+    const at = locate(segs, s);
+    segRef.current = at.i;
+    if (vidRef.current) vidRef.current.currentTime = at.src;
   };
-  // שינוי נקודות החיתוך מזיז את הסרטון לנקודה כדי שרואים אותה
-  const setTrim = (k, val) => {
-    const next = k === "start" ? { start: clamp(val, 0, cfg.end - 1) } : { end: clamp(val, cfg.start + 1, dur) };
-    // תזמון הכתוביות נמדד מתחילת הקטע: כשההתחלה זזה, הוא זז איתה
-    const d = k === "start" ? next.start - cfg.start : 0;
-    if (d && cfg.words?.length) next.words = cfg.words.map((w) => ({ ...w, start: w.start - d, end: w.end - d }));
-    up(next);
-    if (vidRef.current) vidRef.current.currentTime = k === "start" ? next.start : Math.max(0, next.end - 0.5);
+  // שינוי נקודות של קטע מזיז את הסרטון לנקודה כדי שרואים אותה
+  const MIN_SEG = 0.5;
+  const setSeg = (i, k, val) => {
+    if (val == null || !isFinite(val)) return;
+    const s = segs[i];
+    const v = k === "start" ? clamp(val, 0, Math.max(0, s.end - MIN_SEG)) : clamp(val, s.start + MIN_SEG, dur || s.end);
+    up({ segments: segs.map((x, j) => (j === i ? { ...x, [k]: v } : x)) });
+    segRef.current = i;
+    if (vidRef.current) vidRef.current.currentTime = k === "start" ? v : Math.max(0, v - 0.5);
+    setPos(segOffset(segs, i) + (k === "start" ? 0 : Math.max(0, v - 0.5 - s.start)));
+  };
+  // קטע חדש: מתחיל איפה שהקודם נגמר, באורך 5 שניות
+  const addSeg = () => {
+    const last = segs[segs.length - 1];
+    const start = last.end + 1 <= dur ? last.end : Math.max(0, dur - 5);
+    up({ segments: [...segs, { start, end: Math.min(dur, start + 5) }] });
+    segRef.current = segs.length;
+    if (vidRef.current) vidRef.current.currentTime = start;
+    setPos(totalLen(segs));
+  };
+  const removeSeg = (i) => {
+    if (segs.length < 2) return;
+    up({ segments: segs.filter((_, j) => j !== i) });
+    segRef.current = 0;
+    seek(0);
+  };
+  // הזזת קטע למעלה או למטה ברשימה = שינוי הסדר בסרטון
+  const moveSeg = (i, d) => {
+    const j = i + d;
+    if (j < 0 || j >= segs.length) return;
+    const next = [...segs];
+    [next[i], next[j]] = [next[j], next[i]];
+    up({ segments: next });
   };
   useEffect(() => { if (vidRef.current) vidRef.current.volume = cfg.origVol; }, [cfg.origVol]);
   useEffect(() => { if (audRef.current) { audRef.current.volume = cfg.musicVol; if (!cfg.music) audRef.current.pause(); else if (playing) audRef.current.play().catch(() => {}); } }, [cfg.music, cfg.musicVol, playing]);
@@ -505,12 +629,12 @@ export default function VideoEditor({ t, header, version, source, filter, effect
   const autoCaptions = async () => {
     if (!isVideo || stt || job) return;
     setStt(true);
-    const res = await transcribeClip(source.src, cfg.start, cfg.end || dur);
+    const res = await transcribeClip(source.src, segs);
     setStt(false);
     if (res.error) return toast(STT_ERRORS[res.error] || t("התמלול נכשל. נסו שוב.", "Transcription failed. Try again."));
     if (!res.words.length) return toast(t("לא זוהה דיבור בקטע הזה", "No speech found in this part"));
-    up({ caps: true, capStyle: "pop", words: res.words, capText: res.words.map((w) => w.word).join(" ") });
-    toast(res.cut ? t("הכתוביות נוצרו לשתי הדקות הראשונות", "Captions were made for the first two minutes")
+    up({ caps: true, capStyle: "pop", words: res.words, wordsKey: segKey(segs), capText: res.words.map((w) => w.word).join(" ") });
+    toast(res.cut ? t("הכתוביות נוצרו ל-10 הדקות הראשונות", "Captions were made for the first 10 minutes")
       : t("הכתוביות נוצרו ✨ אפשר לתקן מילים בטקסט", "Captions are ready ✨ You can fix words in the text"));
   };
   return (
@@ -539,14 +663,31 @@ export default function VideoEditor({ t, header, version, source, filter, effect
         {tab === "cut" && (
           <div className="card stack">
             {isVideo ? <>
-              <h3>{t("איזה קטע נכנס לסרטון", "Which part goes in")}</h3>
-              <label className="rangerow"><span>{t("התחלה", "Start")}</span>
-                <input type="range" min="0" max={dur || 0} step="0.1" value={cfg.start} onChange={(e) => setTrim("start", +e.target.value)} dir="ltr" disabled={busy} />
-                <b className="ltr">{fmt(cfg.start)}</b></label>
-              <label className="rangerow"><span>{t("סוף", "End")}</span>
-                <input type="range" min="0" max={dur || 0} step="0.1" value={cfg.end} onChange={(e) => setTrim("end", +e.target.value)} dir="ltr" disabled={busy} />
-                <b className="ltr">{fmt(cfg.end)}</b></label>
-              <span className="muted small">{t(`אורך הסרטון: ${outDur.toFixed(1)} שניות`, `Length: ${outDur.toFixed(1)} seconds`)}</span>
+              <div className="row"><h3>{t("הקטעים שנכנסים לסרטון", "Parts that go in")}</h3><span className="muted small">{t(`סה״כ ${fmt(outDur)}`, `Total ${fmt(outDur)}`)}</span></div>
+              <span className="muted small">{t("הקטעים מתחברים לפי הסדר ברשימה. אפשר לגרור את הפס או להקליד זמן (למשל 2:05).", "Parts play in list order. Drag the slider or type a time (e.g. 2:05).")}</span>
+              {segs.map((sg, i) => (
+                <div key={i} className={`segcard ${curSeg === i ? "on" : ""}`}>
+                  <div className="row">
+                    <b>{t(`קטע ${i + 1}`, `Part ${i + 1}`)} <span className="muted small ltr">· {fmt(segLen(sg))}</span></b>
+                    <span className="segtools">
+                      {segs.length > 1 && <>
+                        <button className="chip small" onClick={() => moveSeg(i, -1)} disabled={busy || i === 0} aria-label={t("להזיז למעלה", "Move up")}>▲</button>
+                        <button className="chip small" onClick={() => moveSeg(i, 1)} disabled={busy || i === segs.length - 1} aria-label={t("להזיז למטה", "Move down")}>▼</button>
+                        <button className="chip small" onClick={() => removeSeg(i)} disabled={busy} aria-label={t("מחיקת הקטע", "Delete part")}>×</button>
+                      </>}
+                    </span>
+                  </div>
+                  {[["start", t("התחלה", "Start")], ["end", t("סוף", "End")]].map(([k, l]) => (
+                    <label key={k} className="rangerow segrow"><span>{l}</span>
+                      <input type="range" min="0" max={dur || 0} step="0.1" value={sg[k]} onChange={(e) => setSeg(i, k, +e.target.value)} dir="ltr" disabled={busy} />
+                      <input key={`${k}-${sg[k].toFixed(1)}`} className="ltr segtime" defaultValue={fmtFine(sg[k])} inputMode="decimal" disabled={busy} aria-label={`${l} ${i + 1}`}
+                        onBlur={(e) => { const v = parseTime(e.target.value); if (v == null) e.target.value = fmtFine(sg[k]); else setSeg(i, k, v); }}
+                        onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} />
+                    </label>
+                  ))}
+                </div>
+              ))}
+              <button className="btn btn-soft btn-sm" onClick={addSeg} disabled={busy || !dur}>{t("＋ הוספת קטע", "＋ Add a part")}</button>
             </> : <>
               <h3>{t("כמה זמן התמונה מוצגת", "How long the photo shows")}</h3>
               <label className="rangerow"><span>{t("אורך", "Length")}</span>
@@ -573,7 +714,9 @@ export default function VideoEditor({ t, header, version, source, filter, effect
                   {stt ? t("מתמללים את הדיבור…", "Transcribing…") : cfg.words?.length ? t("✨ ליצור שוב ממה שנאמר", "✨ Make again from speech") : t("✨ כתוביות אוטומטיות ממה שנאמר", "✨ Auto captions from speech")}
                 </button>
               )}
-              {cfg.words?.length > 0 && <span className="muted small">{cfg.capText.split(/\s+/).filter(Boolean).length === cfg.words.length
+              {cfg.words?.length > 0 && <span className="muted small">{cfg.wordsKey !== segKey(segs)
+                ? t("הקטעים השתנו מאז התמלול. לחצו ״ליצור שוב״ כדי שהכתוביות יתאימו.", "The parts changed since transcription. Tap “Make again” so captions match.")
+                : cfg.capText.split(/\s+/).filter(Boolean).length === cfg.words.length
                 ? t("הכתוביות מתוזמנות לדיבור. אפשר לתקן מילה, בלי להוסיף או למחוק מילים.", "Captions follow the speech. You can fix a word, without adding or removing words.")
                 : t("מספר המילים השתנה, אז הכיתוב מתחלק שווה לאורך הסרטון.", "The word count changed, so the caption is spread evenly over the video.")}</span>}
               <div className="row start" style={{ gap: 8, flexWrap: "wrap" }}>

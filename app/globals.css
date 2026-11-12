@@ -619,3 +619,10 @@ nav button { touch-action: manipulation; }
 .tc { text-align: center; }
 .rangerow.edtime { grid-template-columns: 24px 1fr 76px; }
 .looptoggle { align-self: flex-start; }
+/* קטעים בחלון העריכה */
+.segcard { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; background: #0b0b13; }
+.segcard.on { border-color: var(--yellow); box-shadow: 0 0 8px rgba(255, 230, 0, 0.25); }
+.segtools { display: flex; gap: 4px; }
+.segtools .chip { min-height: 28px; min-width: 30px; padding: 0 8px; }
+.rangerow.segrow { grid-template-columns: 44px 1fr 66px; }
+.segtime { height: 30px; padding: 0 6px; font-size: 12.5px; text-align: center; border-radius: 8px; border: 1px solid var(--line); background: #101019; color: #fff; }
