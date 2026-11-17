@@ -626,3 +626,8 @@ nav button { touch-action: manipulation; }
 .segtools .chip { min-height: 28px; min-width: 30px; padding: 0 8px; }
 .rangerow.segrow { grid-template-columns: 44px 1fr 66px; }
 .segtime { height: 30px; padding: 0 6px; font-size: 12.5px; text-align: center; border-radius: 8px; border: 1px solid var(--line); background: #101019; color: #fff; }
+/* כתוביות חיות על נגן הגרסה */
+.livecaps { position: absolute; inset-inline: 14px; bottom: 64px; z-index: 2; display: flex; flex-wrap: wrap; justify-content: center; gap: 0 8px; font-size: 21px; font-weight: 800; line-height: 1.3; color: #fff; text-align: center; pointer-events: none; -webkit-text-stroke: 4px rgba(0, 0, 0, 0.7); paint-order: stroke fill; }
+.livecaps.big { font-size: 27px; }
+.livecaps span.on { color: #ffe600; text-shadow: 0 0 12px rgba(255, 230, 0, 0.6); }
+.capsbadge { position: absolute; top: 10px; right: 12px; z-index: 3; font-size: 12px; padding: 4px 10px; border-radius: 12px; background: rgba(0, 0, 0, 0.65); border: 1px solid var(--yellow); color: #fff; pointer-events: none; }

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { supabase } from "@/lib/supabase";
-import VideoEditor from "./VideoEditor";
+import VideoEditor, { autoTranscribe, CaptionOverlay } from "./VideoEditor";
 
 /* ---------- נתונים קבועים ---------- */
 const SUPPORT_EMAIL = "postenter@gmail.com";
@@ -204,7 +204,7 @@ const INITIAL = {
   profiles: [], pid: null, newProf: "", prev: "home", quizFrom: "auth",
   uid: null, busy: false, authNote: "", confirmDelete: false,
   connecting: null,
-  mediaSel: null, camTry: 0, pv: null, pvLoop: false, note: "", picks: [], aiN: 0, applying: false,
+  mediaSel: null, camTry: 0, pv: null, pvLoop: false, autoCaps: null, note: "", picks: [], aiN: 0, applying: false,
   camFacing: "environment", camMode: "photo", camZoom: 1, camHW: null, camTorchOK: false, camTorch: false, camRatio: "full", camGrid: false, camTimer: 0, countdown: 0, camDims: null, camError: "", camReady: false, recording: false, recSec: 0,
 };
 // השדות ששייכים לפרופיל (ולא לחשבון): הגדרות, שאלון, האשטגים, חשבונות מחוברים ולוח תוכן
@@ -253,6 +253,7 @@ const FX_RULES = [
   [/עם לוגו|הוסף.{0,6}לוגו|with logo|add.{0,6}logo/i, (f) => ({ ...f, logo: true }), ["עם לוגו", "With logo"]],
   [/בלי כתוביות|ללא כתוביות|בלי כיתוב|ללא כיתוב|no captions?|no subtitles/i, (f) => ({ ...f, subs: false }), ["בלי כיתוב", "No captions"]],
   [/כיתוב גדול|כתוביות גדולות|גדול יותר.{0,8}כיתוב|bigger captions?|larger captions?/i, (f) => ({ ...f, subs: true, bigSubs: true }), ["כיתוב גדול", "Bigger captions"]],
+  [/^(?!.*(בלי|ללא|no)).*(כתוביות|כיתוב|תמלול|תמלל|caption|subtitle|transcri)/i, (f) => ({ ...f, subs: true }), ["כתוביות", "Captions"]],
 ];
 const parseFx = (note, fx = {}) => FX_RULES.reduce((acc, [re, fn, label]) => (re.test(note) ? { fx: fn(acc.fx), applied: [...acc.applied, label] } : acc), { fx, applied: [] });
 // מתרגם את האפקטים לפילטר CSS שמוחל על התמונה או הסרטון של הגרסה
@@ -671,6 +672,23 @@ export default function GilosApp() {
     const img = first?.kind === "image" ? first.url : null, vid = first?.kind === "video" ? first.url : null;
     const versions = makeVersions().map((v) => ({ ...v, img, vid }));
     set((s) => ({ credits: s.credits - 1, versions, pstep: 0, linkOpen: false, screen: "process" }));
+    if (vid && S.subs) runAutoCaps(vid);
+  };
+
+  // כתוביות אוטומטיות: תמלול הסרטון ברקע. התוצאה משותפת לכל הגרסאות של אותו סרטון
+  const runAutoCaps = async (src) => {
+    if (S.autoCaps?.src === src && S.autoCaps.status !== "error") return;
+    set({ autoCaps: { src, status: "loading" } });
+    const res = await autoTranscribe(src);
+    set((s) => (s.autoCaps?.src === src ? { autoCaps: res.error ? { src, status: "error", error: res.error } : { src, status: "done", words: res.words, duration: res.duration } } : {}));
+    if (res.error) toast(res.error === "not_configured" ? t("הכתוביות האוטומטיות עוד לא מחוברות", "Automatic captions aren't connected yet")
+      : res.error === "rate_limited" ? t("יותר מדי בקשות לכתוביות כרגע. נסו שוב בעוד דקה.", "Too many caption requests right now. Try again in a minute.")
+      : t("לא הצלחנו ליצור כתוביות לסרטון הזה", "We couldn't make captions for this video"));
+    else if (!res.words.length) toast(t("לא זוהה דיבור בסרטון, אז אין כתוביות", "No speech found in the video, so no captions"));
+  };
+  const capsFor = (v) => {
+    const src = v.baked ? v.srcVid : v.vid;
+    return src && S.autoCaps?.src === src ? S.autoCaps : null;
   };
 
   /* ---------- מדיה: קבצים מהמכשיר ומצלמה ---------- */
@@ -1069,6 +1087,8 @@ export default function GilosApp() {
     set({ applying: true, picks: [] });
     setTimeout(() => {
       const { version: nv, applied } = reviseVersion(v, note);
+      const vid = v.baked ? v.srcVid : v.vid;
+      if (nv.fx?.subs && vid && (!capsFor(v) || capsFor(v).status === "error")) runAutoCaps(vid);
       const swap = (list) => list.map((x) => (x.id === v.id ? nv : x));
       set((s) => ({ versions: swap(s.versions), saved: swap(s.saved), chosen: s.chosen?.id === v.id ? nv : s.chosen, note: "", applying: false }));
       // אומרים בדיוק מה בוצע, ומה מחכה למנוע ה-AI
@@ -1578,7 +1598,7 @@ export default function GilosApp() {
           header={top(t("חלון עריכה", "Editor"), "vpreview")}
           filter={fxFilter(fx)} effectName={fx.lookName ? t(fx.lookName[0], fx.lookName[1]) : ""}
           logo={logoImg ? { src: logoImg, color: logoColor } : null} logoCfg={lc}
-          defaults={{ caps: fx.subs ?? S.subs, bigCaps: !!fx.bigSubs, logo: fx.logo ?? S.watermark, capText: "" }}
+          defaults={{ caps: fx.subs ?? S.subs, bigCaps: !!fx.bigSubs, logo: fx.logo ?? S.watermark, capText: "", auto: capsFor(v)?.status === "done" ? capsFor(v) : null }}
           music={S.sound === "lib" && track?.url ? { url: track.url, title: track.title } : null}
           saved={v.edit} onDone={(res) => finishEdit(v, res)} />
       );
@@ -1601,6 +1621,8 @@ export default function GilosApp() {
                 : <div className="vplaceholder">{tr(v.name)}</div>}
               {fxTint(v.fx) && <span className="tint" style={{ background: v.g }} />}
               {(v.fx?.logo ?? S.watermark) && wm(true)}
+              {!v.baked && (v.fx?.subs ?? S.subs) && capsFor(v)?.words?.length > 0 && <CaptionOverlay words={capsFor(v).words} big={!!v.fx?.bigSubs} />}
+              {!v.baked && capsFor(v)?.status === "loading" && <span className="capsbadge">{t("מתמללים לכתוביות…", "Making captions…")}</span>}
               <KindBadge kind={verKind(v)} dur={v.vid ? null : v.dur} label={verKind(v) === "image" ? t("תמונה", "Photo") : t("סרטון", "Video")} />
               {v.rev > 1 && <span className="revbadge">{t(`תיקון ${v.rev - 1}`, `Edit ${v.rev - 1}`)}</span>}              {S.applying && <div className="vapplying"><span className="ring" style={{ width: 54, height: 54 }} /><span>{t("מעדכנים את הגרסה…", "Updating this version…")}</span></div>}
             </div>

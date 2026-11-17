@@ -264,6 +264,55 @@ async function transcribeClip(src, segs, language) {
 }
 
 const pickMime = () => (typeof MediaRecorder === "undefined" ? null : MIME_TYPES.find((m) => MediaRecorder.isTypeSupported(m)) || "");
+// תמלול אוטומטי של סרטון שלם (בעיבוד, כשהמתג "כתוביות אוטומטיות" דלוק)
+// → { words, duration } או { error }
+export async function autoTranscribe(src) {
+  const v = document.createElement("video");
+  v.preload = "metadata";
+  v.muted = true;
+  v.src = src;
+  try { if (v.readyState < 1) await waitFor(v, "loadedmetadata", "error", 15000); } catch { return { error: "no_audio" }; }
+  const duration = v.duration;
+  v.removeAttribute("src");
+  if (!duration || !isFinite(duration)) return { error: "no_audio" };
+  const res = await transcribeClip(src, [{ start: 0, end: duration }]);
+  return res.error ? res : { words: res.words, duration, cut: res.cut };
+}
+
+// כתוביות חיות על נגן התצוגה המקדימה: קוראות את הזמן מהסרטון שלידן ומציגות
+// 3 מילים בכל פעם, המילה שנאמרת בצהוב, ובשקט כלום
+export function CaptionOverlay({ words, big }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    let raf, last = "";
+    const tick = () => {
+      const el = ref.current, video = el?.parentElement?.querySelector("video");
+      if (el && video) {
+        const t = video.currentTime;
+        let a = -1;
+        words.forEach((w, i) => { if (w.start <= t) a = i; });
+        const live = a >= 0 && t <= words[a].end + 0.7;
+        const from = Math.floor(Math.max(a, 0) / POP_CHUNK) * POP_CHUNK;
+        const key = live ? `${from}:${a}` : "";
+        if (key !== last) {
+          last = key;
+          el.replaceChildren(...(live ? words.slice(from, from + POP_CHUNK).map((w, k) => {
+            const sp = document.createElement("span");
+            sp.textContent = w.word;
+            if (from + k === a) sp.className = "on";
+            return sp;
+          }) : []));
+          el.style.display = live ? "" : "none";
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [words]);
+  return <span ref={ref} className={`livecaps${big ? " big" : ""}`} dir="auto" aria-hidden="true" style={{ display: "none" }} />;
+}
+
 export const canRender = () => typeof window !== "undefined" && typeof MediaRecorder !== "undefined" && !!HTMLCanvasElement.prototype.captureStream;
 
 /* ---------- הפקה ---------- */
@@ -415,7 +464,12 @@ export default function VideoEditor({ t, header, version, source, filter, effect
     effect: true, logo: defaults.logo && !!logo, logoCfg,
     ...(saved || {}),
     // עריכה ישנה שמרה התחלה וסוף אחד: הופך לקטע אחד
-    segments: saved?.segments?.length ? saved.segments : [{ start: saved?.start || 0, end: saved?.end || 0 }],
+    segments: saved?.segments?.length ? saved.segments : [{ start: saved?.start || 0, end: saved?.end || defaults.auto?.duration || 0 }],
+    // תמלול שכבר נעשה בעיבוד: הכתוביות מוכנות כשהחלון נפתח
+    ...(!saved && defaults.auto?.words?.length ? {
+      caps: true, words: defaults.auto.words, capText: defaults.auto.words.map((w) => w.word).join(" "),
+      wordsKey: segKey([{ start: 0, end: defaults.auto.duration }]),
+    } : {}),
   }));
   const segRef = useRef(0); // באיזה קטע התצוגה המקדימה נמצאת
   const [tab, setTab] = useState("cut");
